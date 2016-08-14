@@ -150,12 +150,6 @@ typedef struct {
     /* Poller used to wait for file descriptors. */
     struct mill_poller *poller;
 
-    /* List of all workers */
-    struct mill_list workers;
-
-    /* Work queue shared by anonymous (permanent) workers */
-    struct mill_pipe_s *task_queue;
-
     /* Pipe for notification of finished tasks. */
     int task_fd[2];
 

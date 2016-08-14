@@ -242,7 +242,7 @@ void *mill_init(int stacksize, int nworkers) {
 void mill_fini(void) {
     if(mill) {
         mill_waitall(-1);
-        delete_workers();
+        close_task_fds();
         mill_poller_fini();
         mill_purgestacks();
         mill_timers_fini();

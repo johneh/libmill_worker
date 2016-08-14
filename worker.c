@@ -32,7 +32,6 @@ enum task_code {
     tFSYNC,
     tFSTAT,
     tAWAIT,
-    tSTATUS,    /* thread initialization status */
 };
 
 /* NUM_WORKERS -- # of anonymous permanent workers with a shared task_queue
@@ -46,7 +45,7 @@ struct mill_worker_s {
     struct mill_list_item item;
     pthread_t pth;
     mill_pipe task_queue;   /* request */
-    int res_fd; /* response */
+    int sfd;    /* thread initialization status written to this fd */
 };
 
 typedef struct mill_task_s {
@@ -79,9 +78,17 @@ typedef struct mill_task_s {
         ssize_t ssz;
         int64_t ddline;
     };
+
+    int res_fd; /* response */
 } task;
 
+/* Global work queue for anonymous (permanent) workers */
+static struct mill_pipe_s *mill_task_queue;
+
+static int num_workers;
+static pthread_once_t workers_initialized = PTHREAD_ONCE_INIT;
 static int init_task_fds(void);
+static void init_workers_once(void);
 
 #define in_worker_thread()  (mill->task_fd[0] == -2)
 
@@ -153,19 +160,25 @@ static ssize_t queue_task(mill_pipe task_queue,
             volatile task *req, int64_t deadline) {
     mill_assert(mill);
 
-    if (!task_queue) {
-        /* No workers created at startup. */
-        if (!mill->task_queue && (-1 == init_workers(NUM_WORKERS))) {
+    if (mill_slow(mill->task_fd[0] == -1)) {
+        int rc = init_task_fds();
+        if (rc == -1) {
             task_free(req);
             return -1;
         }
-        task_queue = mill->task_queue;
     }
-    mill_assert(mill->task_fd[0] >= 0);
 
+    /* pthread_once(&workers_initialized, init_workers_once);
+     *   XXX: Performance killer? Lets create at least one worker thread in init_workers().
+     */
+
+    mill_assert(mill_task_queue);
+    if (!task_queue)
+        task_queue = mill_task_queue;
     req->errcode = TASK_QUEUED;
     req->cr = mill->running;
     /* enqueue task */
+    req->res_fd = mill->task_fd[1];
     mill_pipesend(task_queue, (void *) &req);
     mill->num_tasks++;
 
@@ -193,7 +206,7 @@ static ssize_t queue_task(mill_pipe task_queue,
         ret = req->ssz;
         break;
     case tSTAT: case tUNLINK: case tFSYNC: case tFSTAT:
-    case tAWAIT: case tSTATUS:
+    case tAWAIT:
         /* fall through */
     default:
         if (errcode)
@@ -331,10 +344,10 @@ int mill_worker_await(struct mill_worker_s *w, int64_t deadline) {
     return queue_task(w->task_queue, req, deadline);
 }
 
-static int task_signal(task *res, int fd) {
+static int task_signal(task *req) {
     int size = sizeof (task *);
     while (1) {
-        int n = (int) write(fd, (void *) & res, size);
+        int n = (int) write(req->res_fd, (void *) & req, size);
         if (n == size)
             break;
         mill_assert(n < 0);
@@ -343,17 +356,17 @@ static int task_signal(task *res, int fd) {
         /* EAGAIN -- pipe capacity execeeded ? */
         if (errno != EAGAIN)
             return -1;
-        mill_fdevent(fd, FDW_OUT, -1);
+        mill_fdevent(req->res_fd, FDW_OUT, -1);
     }
     return 0;
 }
 
-static coroutine void do_work(task *req, int rfd) {
+static coroutine void do_work(task *req) {
     yield();
     req->ssz = req->taskfn(req->buf);
     if (req->ssz == -1)
         req->errcode = errno;
-    if (-1 == task_signal(req, rfd))
+    if (-1 == task_signal(req))
         task_free(req);
 }
 
@@ -364,18 +377,23 @@ static void *worker_func(void *p) {
 #define DEQUEUE_TASK(ptr_done)  \
     *((task **) mill_piperecv(w->task_queue, (ptr_done)))
 
-#define WGO(do_fn) do {\
+#define WGO(do_fn, rq) do {\
     void *ptr = mill_allocstack(); \
     if (!ptr) { \
-        req->errcode = errno; \
-        req->ssz = -1; \
+        rq->errcode = errno; \
+        rq->ssz = -1; \
             break; \
     } \
-    mill_go(do_fn(req, w->res_fd), ptr); \
+    mill_go(do_fn(rq), ptr); \
 } while(0)
 
     mill_t *millptr = mill_init__p(64*1024);
-    millptr->task_fd[0] = millptr->task_fd[1] = -2;
+    int status = !!millptr;
+    int rc = (int) write(w->sfd, &status, sizeof(status));
+    mill_assert(rc == sizeof(status));
+    if(mill_slow(status == 0))
+        return NULL;
+    millptr->task_fd[0] = millptr->task_fd[1] = -2; /* Kludge to mark it as a worker thread */
 
     while (! done) {
         task *req = DEQUEUE_TASK(&done);
@@ -440,41 +458,16 @@ static void *worker_func(void *p) {
                 req->errcode = errno;
             break;
         case tTASK_CORO:
-            WGO(do_work);
+            WGO(do_work, req);
             goto x;
         case tAWAIT:
             if (-1 == mill_waitall(req->ddline))
                 req->errcode = errno;
             break;
-        case tSTATUS: {
-            /* N.B.: cannot use task_signal() to send back status response.
-             * "mill" (and millptr) may be NULL. */
-            int size = sizeof (task *);
-            if (!millptr)
-                req->errcode = errno;
-            while (1) {
-                int n = (int) write(w->res_fd, (void *) &req, size);
-                if (n == size)
-                    break;
-                mill_assert(n < 0);
-                if (errno == EINTR)
-                    continue;
-                mill_assert(errno == EAGAIN);
-                struct pollfd fds[1] = {{0}};
-                fds[0].fd = w->res_fd;
-                fds[0].events = POLLOUT;
-                while (poll(fds, 1, -1) < 0) {
-                    mill_assert(errno == EINTR);
-                }
-            }
-            if (!millptr)
-                return NULL;
-        }
-            goto x;
         default:
             mill_panic("libmill: worker_func(): received unexpected code");
         }
-        if (-1 == task_signal(req, w->res_fd))
+        if (-1 == task_signal(req))
             task_free(req);
 x:;
     }
@@ -485,49 +478,43 @@ x:;
 }
 
 static struct mill_worker_s *worker_create__p(mill_pipe task_queue) {
-    int rc;
     struct mill_worker_s *w;
-    task *status_req;
+    int fd[2];
     mill_assert(!in_worker_thread());   /* subcontracting isn't allowed */
     w = mill_malloc(sizeof (struct mill_worker_s)); 
     if (! w) {
         errno = ENOMEM;
         return NULL;
     }
-    status_req = mill_malloc(sizeof (task));
-    if (!status_req) {
+    if (-1 == pipe(fd)) {
         mill_free(w);
-        errno = ENOMEM;
         return NULL;
     }
     w->task_queue = task_queue;
-    w->res_fd = mill->task_fd[1];
-    rc = pthread_create(& w->pth, NULL, worker_func, w);
+    w->sfd = fd[1];
+    int rc = pthread_create(& w->pth, NULL, worker_func, w);
     if (rc != 0) {
         errno = rc;
         mill_free(w);
-        mill_free(status_req);
+        close(fd[0]);
+        close(fd[1]);
         return NULL;
     }
 
-    status_req->code = tSTATUS;
-    rc = queue_task(task_queue, status_req, -1);
-    if (rc < 0) {
+    int status = 0;
+    rc = (int) read(fd[0], &status, sizeof (int));
+    if (rc != sizeof(int) || status <= 0) {
         /* mill_init() failed; errno already set. */
         (void) pthread_join(w->pth, NULL);
         mill_free(w);
-        return NULL;
     }
-    mill_list_insert(&mill->workers, &w->item, NULL);
+    close(fd[0]);
+    close(fd[1]);
     return w;
 }
 
 struct mill_worker_s *mill_worker_create(void) {
     mill_assert(mill);
-    if (mill_slow(mill->task_fd[0] == -1)) {
-        if (-1 == init_task_fds())
-            return NULL;
-    }
     mill_pipe tq = mill_pipemake(sizeof (task *));
     if (!tq)
         return NULL;
@@ -544,23 +531,13 @@ void mill_worker_delete(struct mill_worker_s *w) {
     mill_pipeclose(w->task_queue);
     rc = pthread_join(w->pth, & ptr);
     mill_assert(rc == 0);
-    mill_list_erase(&mill->workers, &w->item);
     mill_pipefree(w->task_queue);
     mill_free(w);
 }
 
-void delete_workers(void) {
+void close_task_fds(void) {
     if (in_worker_thread())
         return;
-    while (!mill_list_empty(&mill->workers)) {
-        struct mill_worker_s *w = mill_cont(
-            mill_list_begin(&mill->workers), struct mill_worker_s, item);
-        mill_worker_delete(w);
-    }
-    if (mill->task_queue) {
-        mill_pipefree(mill->task_queue);
-        mill->task_queue = NULL;
-    }
     if (mill->task_fd[1] >= 0) {
         /* Avoid leaking stack memory for the task_wait() coroutine */
         close(mill->task_fd[1]);
@@ -598,41 +575,39 @@ err:
     return 0;
 }
 
-int init_workers(int nworkers) {
-    mill_list_init(&mill->workers);
-    if (nworkers == 0)
-        return 0;
+void init_workers(int nworkers) {
     if (nworkers < 0) {
         const char *val;
         nworkers = NUM_WORKERS;
         val = getenv("MILL_WORKERS");
         if (val) {
             nworkers = atoi(val);
-            if (nworkers == 0)
-                return 0;
             if (nworkers < 0)
                 nworkers = NUM_WORKERS;
         }
     }
-    if (nworkers > MAX_WORKERS)
+    if (nworkers == 0)
+        nworkers = 1;
+    else if (nworkers > MAX_WORKERS)
         nworkers = MAX_WORKERS;
-    if (-1 == init_task_fds())
-        return -1;
-    mill->task_queue = mill_pipemake(sizeof (task *));
-    if (!mill->task_queue)
-        return -1;
-    int i;
-    for (i = 0; i < nworkers; i++) {
-        mill_pipe tq = mill_pipedup(mill->task_queue);
+    mill_atomic_set(&num_workers, 0, nworkers);
+    pthread_once(&workers_initialized, init_workers_once);
+}
+
+static void init_workers_once(void) {
+    mill_task_queue = mill_pipemake(sizeof (task *));
+    if (!mill_task_queue)
+        mill_panic("failed to initialize task queue");
+    int i, count = 0;
+    for (i = 0; i < num_workers; i++) {
+        mill_pipe tq = mill_pipedup(mill_task_queue);
         struct mill_worker_s *w = worker_create__p(tq);
         if (!w)
             mill_pipefree(tq);
+        else
+            count++;
     }
-    if (mill_list_empty(&mill->workers)) {
-        mill_pipefree(mill->task_queue);
-        mill->task_queue = NULL;
-        return -1;
-    }
-    return 0;
+    if (count == 0)
+        mill_panic("failed to create any worker thread");
 }
 
