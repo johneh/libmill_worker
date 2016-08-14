@@ -1,6 +1,6 @@
 CC = gcc
 CFLAGS = -c -O2 -g -I../ -pthread
-BINS = apache_serve fsop pi mcp du3 xchoose fanin wrker
+BINS = apache_serve fsop pi mcp du3 xchoose fanin wrker mu
 LIBS = ../lib/libmill.a -pthread
 
 all: clean $(BINS)
@@ -33,7 +33,10 @@ readdir.o: readdir.h readdir.c
 	$(CC) $(CFLAGS) readdir.c
 
 mcp: mcp.o
-	$(CC) -o $@ $^ $(LIBS) 
+	$(CC) -o $@ $^ $(LIBS)
+
+mu: mu.o
+	$(CC) -o $@ $^ $(LIBS)
 
 .c.o:
 	$(CC) $(CFLAGS) $< -o $@

@@ -333,6 +333,18 @@ MILL_EXPORT void mill_worker_delete(mill_worker w);
 MILL_EXPORT int mill_worker_await(mill_worker w, int64_t deadline);
 
 /******************************************************************************/
+/*  Mutex library                                                               */
+/******************************************************************************/
+
+typedef struct mill_mutex_s *mill_mutex;
+
+MILL_EXPORT mill_mutex mill_mutex_make(void);
+MILL_EXPORT mill_mutex mill_mutex_ref(mill_mutex mu);
+MILL_EXPORT void mill_mutex_unref(mill_mutex mu);
+MILL_EXPORT void mill_mutex_lock(mill_mutex mu);
+MILL_EXPORT void mill_mutex_unlock(mill_mutex mu);
+
+/******************************************************************************/
 /*  IP address library                                                        */
 /******************************************************************************/
 

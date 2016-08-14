@@ -59,6 +59,7 @@ libmill_la_SOURCES = \
     dns/dns.h \
     dns/dns.c \
     pipe.c \
+    mutex.c \
     waitgroup.h \
     waitgroup.c
 
