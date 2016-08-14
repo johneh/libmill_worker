@@ -504,9 +504,11 @@ static struct mill_worker_s *worker_create__p(mill_pipe task_queue) {
     int status = 0;
     rc = (int) read(fd[0], &status, sizeof (int));
     if (rc != sizeof(int) || status <= 0) {
-        /* mill_init() failed; errno already set. */
+        /* mill_init() failed. */
         (void) pthread_join(w->pth, NULL);
         mill_free(w);
+        w = NULL;
+        errno = EAGAIN; /* XXX: ?? */
     }
     close(fd[0]);
     close(fd[1]);
