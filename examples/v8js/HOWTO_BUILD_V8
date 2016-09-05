@@ -1,0 +1,34 @@
+Fetch depot_tools:
+$ git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+
+Add depot_tools to your PATH:
+$ export PATH=`pwd`/depot_tools:"$PATH"
+
+$ fetch v8
+
+Find the _stable_ version for the platform following the instructions here:
+	https://gist.github.com/domenic/aca7774a5d94156bfcc1
+or just use 'git branch -a' to find the latest stable under branch-heads.
+
+$ git checkout -b 5.2 -t branch-heads/5.2
+
+$ make i18nsupport=off x64.release
+	(or make -j8 x64.release)
+
+Locate the libraries:
+$ find out/ -name *.a
+...
+out/x64.release/obj.target/src/libv8_libbase.a
+out/x64.release/obj.target/src/libv8_libplatform.a
+out/x64.release/obj.target/src/libv8_nosnapshot.a
+out/x64.release/obj.target/src/libv8_external_snapshot.a
+out/x64.release/obj.target/src/libv8_base.a
+...
+
+We can then set these variables in our Makefile:
+
+V8_DIR = $(HOME)/src/v8
+V8_INCLUDES = -I$(V8_DIR) -I$(V8_DIR)/include
+V8_TARGET = x64.release
+V8_OUTDIR = $(V8_DIR)/out/$(V8_TARGET)
+V8_LIBDIR = $(V8_OUTDIR)/obj.target/src

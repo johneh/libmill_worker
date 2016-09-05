@@ -2,6 +2,12 @@
 #include <string.h>
 #include <stdlib.h>
 #include <assert.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <limits.h>
+
 #include "libmill.h"
 #include "jsv8.h"
 
@@ -87,6 +93,60 @@ void testgo(js_vm *vm) {
     CHECK(rc, vm);
 }
 
+static char *readfile(const char *filename, size_t *len);
+
+js_handle *ff_readfile(js_vm *vm, int argc, js_handle *argv[]) {
+    char *filename = js_tostring(argv[0]);
+    size_t sz;
+    char *buf = readfile(filename, & sz);
+    free(filename);
+    js_handle *ret;
+    if (buf) {
+        ret = js_string(vm, buf, sz);
+        free(buf);
+    } else
+        ret = JSNULL(vm);
+    return ret;
+}
+
+js_handle *ff_strerror(js_vm *vm, int argc, js_handle *argv[]) {
+    int errnum = (int) js_tonumber(argv[0]);
+    char *s = strerror(errnum);
+    js_handle *ret = js_string(vm, s, strlen(s));
+    return ret;
+}
+
+static js_ffn_t ff_table[] = {
+    { 1, ff_readfile, "readfile" },
+    { 1, ff_strerror, "strerror" },
+};
+
+/* Create an object with the exported C functions */
+js_handle *exports(js_vm *vm) {
+    int i;
+    int n = sizeof (ff_table) / sizeof (ff_table[0]);
+    js_handle *h1 = js_object(vm);
+    for (i = 0; i < n; i++) {
+        js_handle *f1 = js_ffn(vm, &ff_table[i]);
+        if (! js_set(h1, ff_table[i].name, f1))
+            js_panic(vm);
+        js_dispose(f1);
+    }
+    return h1;
+}
+
+void testexports(js_vm *vm) {
+    js_handle *eh = exports(vm);
+    js_set(JSGLOBAL(vm), "c", eh);
+    js_dispose(eh);
+    int rc = js_run(vm,
+"var s = c.readfile('./testjs.c');\n\
+if (s !== null) $print(s.substring(0, 20) + ' ...');"
+    );
+    CHECK(rc, vm);
+}
+
+
 int main(int argc, char *argv[]) {
     mill_init(-1, 0);
     mill_worker w = mill_worker_create();
@@ -94,9 +154,43 @@ int main(int argc, char *argv[]) {
 
     testcall(vm);
     testgo(vm);
+    testexports(vm);
 
     js_vmclose(vm);
     mill_worker_delete(w);
     mill_fini();
     return 0;
 }
+
+
+static char *readfile(const char *filename, size_t *len) {
+    int fd = open(filename, 0, 0666);
+    if (fd < 0)
+        goto er;
+    struct stat sbuf;
+    if (fstat(fd, & sbuf) != 0)
+        goto er;
+    if (S_ISDIR(sbuf.st_mode)) {
+        errno = EISDIR;
+        goto er;
+    }
+    size_t size = sbuf.st_size;
+    char *buf = malloc(size + 1);
+    if (!buf) {
+        errno = ENOMEM;
+        goto er;
+    }
+    if (read(fd, buf, size) != size) {
+        free(buf);
+        goto er;
+    }
+    close(fd);
+    buf[size] = '\0';
+    *len = size;
+    return buf;
+er:
+    if (fd >= 0)
+        close(fd);
+    return NULL;
+}
+
