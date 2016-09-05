@@ -292,7 +292,7 @@ MILL_EXPORT mill_pipe mill_pipedup(mill_pipe mp);
 MILL_EXPORT void mill_pipefree(mill_pipe mp);
 MILL_EXPORT void mill_pipeclose(mill_pipe mp);
 MILL_EXPORT void *mill_piperecv(mill_pipe mp, int *done);
-MILL_EXPORT void mill_pipesend(mill_pipe mp, void *ptr);
+MILL_EXPORT int mill_pipesend(mill_pipe mp, void *ptr);
 
 /******************************************************************************/
 /*  Wait group                                                                */

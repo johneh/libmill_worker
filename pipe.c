@@ -148,10 +148,14 @@ void *mill_piperecv(struct mill_pipe_s *mp, int *done) {
     return ptr;
 }
 
-void mill_pipesend(struct mill_pipe_s *mp, void *ptr) {
+int mill_pipesend(struct mill_pipe_s *mp, void *ptr) {
     int rc = pipe_write(mp, ptr);
-    if (mill_slow(rc == -1))
-        mill_panic("attempt to send to a closed pipe");
+    if (mill_slow(rc == -1)) {
+        /* mill_panic("attempt to send to a closed pipe"); */
+        errno = EPIPE;
+        return -1;
+    }
+    return 0;
 }
 
 void mill_pipeclose(struct mill_pipe_s *mp) {
