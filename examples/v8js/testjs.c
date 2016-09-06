@@ -55,6 +55,7 @@ coroutine void do_task1(js_vm *vm, js_coro *cr, js_handle *inh) {
     free(s1);
 }
 
+/* Coroutine in the V8 thread (concurrency) */
 void testgo(js_vm *vm) {
     js_handle *p1 = js_pointer(vm, (void *) do_task1);
     /* p1 is a js object, can set properties on it */
@@ -76,15 +77,14 @@ void testgo(js_vm *vm) {
     js_dispose(p1);
 
     rc = js_run(vm,
-"for(var i=1; i<=10;i++) {\n\
-    task1('foo'+i, function (err, data) {\n\
+"for(var i=1; i<=5;i++) {\n\
+    task1('go'+i, function (err, data) {\n\
             if (err == null) $print(data);\n\
     });\n\
 }\n"
-"$print('Waiting for response ...');\n"
 "$msleep(35);\n"
-"for(var i=11; i<=15;i++) {\n\
-    task1('foo'+i, function (err, data) {\n\
+"for(var i=6; i<=10;i++) {\n\
+    task1('go'+i, function (err, data) {\n\
         if (err == null) $print(data);\n\
     });\n\
 }\n"
@@ -92,6 +92,34 @@ void testgo(js_vm *vm) {
 
     CHECK(rc, vm);
 }
+
+/* Coroutine in the main thread (concurrency & parallelism) */
+void testsend(js_vm *vm) {
+    js_handle *p1 = js_pointer(vm, (void *) do_task1);
+    js_handle *f1 = js_callstr(vm, "(function(co) {\
+        return function(s, callback) {\
+            $send(co, s, callback);\
+        };\
+    });", NULL, (jsargs_t) { p1 } );
+    assert(f1);
+
+    /* Global.task1 = f1; */
+    int rc = js_set(JSGLOBAL(vm), "task2", f1);
+    assert(rc);
+    js_dispose(f1);
+    js_dispose(p1);
+
+    rc = js_run(vm,
+"for(var i=1; i<=5;i++) {\n\
+    task2('send'+i, function (err, data) {\n\
+            if (err == null) $print(data);\n\
+    });\n\
+}\n"
+    );
+
+    CHECK(rc, vm);
+}
+
 
 static char *readfile(const char *filename, size_t *len);
 
@@ -155,7 +183,7 @@ int main(int argc, char *argv[]) {
     testcall(vm);
     testgo(vm);
     testexports(vm);
-
+    testsend(vm);
     js_vmclose(vm);
     mill_worker_delete(w);
     mill_fini();

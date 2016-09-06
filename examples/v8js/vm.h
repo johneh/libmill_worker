@@ -8,6 +8,10 @@ struct js_vm_s {
     v8::Isolate *isolate;
     char *errstr;
 
+    /* Remote coroutines */
+    mill_pipe inq;
+    mill_pipe outq;
+
     chan ch;
     int ncoro;
 

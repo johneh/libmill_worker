@@ -61,6 +61,8 @@ static Isolate::CreateParams create_params;
 
 extern "C" {
 
+#include "jsv8.h"
+
 #ifdef V8TEST
 #define DPRINT(format, args...) \
 fprintf(stderr, format , ## args);
@@ -68,7 +70,6 @@ fprintf(stderr, format , ## args);
 #define DPRINT(format, args...) /* nothing */
 #endif
 
-extern void js_dispose(js_handle *h);
 extern void js_set_errstr(js_vm *vm, const char *str);
 extern js_coro *choose_coro(chan ch, int64_t ddline);
 
@@ -154,7 +155,7 @@ static void Go(const FunctionCallbackInfo<Value>& args) {
     cr = new js_coro;
     cr->coro = nullptr; /* XXX: not used? */
     cr->vm = vm;
-	cr->callback = make_handle(vm, args[2], V8FUNC);
+    cr->callback = make_handle(vm, args[2], V8FUNC);
     cr->inval = make_handle(vm, args[1], V8UNKNOWN);
     cr->err = 0;
     cr->outval = nullptr;
@@ -205,6 +206,53 @@ static int RunCoroCallback(js_vm *vm, js_coro *cr) {
     return 1;
 }
 
+static void send_coro(js_vm *vm, js_coro *cr) {
+    int rc = mill_pipesend(vm->inq, (void *) &cr);
+    if (rc == -1) {
+        char serr[] = "$send: send to a closed pipe";
+        cr->outval = js_string(vm, serr, strlen(serr));
+        cr->err = 1;
+        cr->coro = nullptr;
+        int rc = mill_chs(cr->vm->ch, &cr);
+        assert(rc == 0);
+    }
+}
+
+// $send(coro, inval, callback)
+static void Send(const FunctionCallbackInfo<Value>& args) {
+    js_vm *vm;
+    js_coro *cr;
+
+    {
+    Isolate *isolate = args.GetIsolate();
+    int argc = args.Length();
+    ThrowNotEnoughArgs(isolate, argc < 3);
+    vm = static_cast<js_vm*>(isolate->GetData(0));
+
+    LOCK_SCOPE(isolate)
+    void *fn = ExternalPtrValue(args[0]);
+    if (!fn)
+        ThrowTypeError(isolate, "$send argument #1: coroutine expected");
+    if (!args[2]->IsFunction())
+        ThrowTypeError(isolate, "$send argument #3: function expected");
+    cr = new js_coro;
+    cr->vm = vm;
+    cr->coro = fn;
+    cr->callback = make_handle(vm, args[2], V8FUNC);
+    cr->inval = make_handle(vm, args[1], V8UNKNOWN);
+    cr->err = 0;
+    cr->outval = nullptr;
+    vm->ncoro++;
+    }
+    send_coro(vm, cr);
+}
+
+static void Close(const FunctionCallbackInfo<Value>& args) {
+    Isolate *isolate = args.GetIsolate();
+    js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
+    mill_pipeclose(vm->inq);
+}
+
 static void CallForeignFunc(
         const v8::FunctionCallbackInfo<v8::Value>& args) {
 
@@ -228,8 +276,8 @@ static void CallForeignFunc(
     for (int i = 0; i < argc; i++)
         ah[i] = make_handle(vm, args[i], V8UNKNOWN);
     js_handle *rh = func_wrap->fp(vm, argc, ah);
-    assert(rh);
-
+    if (!rh) /* uncaught error ?*/
+        rh = vm->null_handle;
     Local<Value> rv = Local<Value>::New(isolate, rh->handle);
     for (int i = 0; i < argc; i++)
         js_dispose(ah[i]);
@@ -296,13 +344,31 @@ static void v8init(void) {
     v8initialized = 1;
 }
 
+/* Start a $send() coroutine in the main thread. */
+coroutine static void start_coro(mill_pipe p) {
+    while (1) {
+        int done;
+        js_coro *cr = *((js_coro **) mill_piperecv(p, &done));
+        if (done)
+            break;
+        assert(cr->coro);
+        Fncoro_t co = (Fncoro_t) cr->coro;
+        go(co(cr->vm, cr, cr->inval));
+    }
+}
+
 /* Invoked by the main thread. */
 js_vm *js8_vmnew(mill_worker w) {
     js_vm *vm = new js_vm;
     vm->w = w;
+    vm->inq = mill_pipemake(sizeof (void *));
+    assert(vm->inq);
+    vm->outq = mill_pipemake(sizeof (void *));
+    assert(vm->outq);
     vm->ch = mill_chmake(sizeof (js_coro *), 5); // XXX: How to select a bufsize??
     assert(vm->ch);
     vm->ncoro = 0;
+    go(start_coro(vm->inq));
     return vm;
 }
 
@@ -324,6 +390,21 @@ static void GlobalSet(Local<Name> name, Local<Value> val,
     String::Utf8Value str(name);
     if (strcmp(*str, "$errno") == 0)
         errno = val->ToInt32(context).ToLocalChecked()->Value();
+}
+
+/* Receive coroutine with result from the main thread. */
+coroutine static void recv_coro(js_vm *vm) {
+    while (1) {
+        int done;
+        js_coro *cr = *((js_coro **) mill_piperecv(vm->outq, &done));
+        if (done) {
+            mill_pipefree(vm->outq);
+            break;
+        }
+        /* Send to the channel to be processed by the V8 microtask. */
+        int rc = mill_chs(vm->ch, &cr);
+        assert(rc == 0);
+    }
 }
 
 /* The second part of the vm initialization. Runs in the worker thread. */
@@ -350,6 +431,10 @@ static int CreateIsolate(js_vm *vm) {
                 FunctionTemplate::New(isolate, MSleep));
     global->Set(String::NewFromUtf8(isolate, "$now"),
                 FunctionTemplate::New(isolate, Now));
+    global->Set(String::NewFromUtf8(isolate, "$send"),
+                FunctionTemplate::New(isolate, Send));
+    global->Set(String::NewFromUtf8(isolate, "$close"),
+                FunctionTemplate::New(isolate, Close));
 
     Local<Context> context = Context::New(isolate, NULL, global);
 
@@ -388,6 +473,7 @@ static int CreateIsolate(js_vm *vm) {
 
 int js8_vminit(js_vm *vm) {
     CreateIsolate(vm);
+    go(recv_coro(vm));
     return 0;
 }
 
@@ -397,6 +483,14 @@ const char *js_errstr(js_vm *vm) {
 
 // Invoked by the main thread.
 void js8_vmclose(js_vm *vm) {
+    //
+    // vm->inq already closed (See js_vmclose()).
+    // Close vm->outq; This causes the receiving coroutine (recv_coro)
+    // to exit the loop and free vm->outq.
+    //
+    mill_pipeclose(vm->outq);
+    mill_pipefree(vm->inq);
+
     if (vm->errstr)
         free(vm->errstr);
     vm->isolate->Dispose();
@@ -677,8 +771,15 @@ void js_send(js_coro *cr, js_handle *oh, int err) {
         oh = cr->vm->null_handle;
     cr->outval = oh;
     cr->err = err;
-    int rc = mill_chs(cr->vm->ch, &cr);
-    assert(rc == 0);
+    if (!cr->coro) {
+        // Coroutine is in the V8 thread.
+        int rc = mill_chs(cr->vm->ch, &cr);
+        assert(rc == 0);
+    } else {
+        // Coroutine is running in the main thread.
+        int rc = mill_pipesend(cr->vm->outq, &cr);
+        assert(rc == 0);
+    }
 }
 
 // Returns a malloced copy

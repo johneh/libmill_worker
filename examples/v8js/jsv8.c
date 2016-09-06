@@ -29,6 +29,9 @@ js_vm *js_vmopen(mill_worker w) {
 }
 
 void js_vmclose(js_vm *vm) {
+    /* Close the write end of the pipe from the V8 thread and
+     * wait for the start_coro (See v8binding.c) coroutine to exit. */
+    (void) js_run(vm, "$close();");
     mill_waitall(-1);
     js8_vmclose(vm);
 }
