@@ -4,8 +4,8 @@
 
 CC = gcc
 CPP = g++
-CFLAGS = -g -O2
-CPPFLAGS = -g -O2
+CFLAGS = -g -O2 -Wall
+CPPFLAGS = -g -O2 -Wall
 #CPPFLAGS = -g -O2 -DV8TEST=1
 #LIBS = -L$(HOME)/opt/lib -lmill
 LIBS = ../../lib/libmill.a
@@ -29,16 +29,16 @@ v8binding.o: v8binding.cc v8binding.h jsdef.h vm.h
 	$(CPP) $(CPPFLAGS) $(INCLUDES) -DV8BINDIR="\"$(V8_OUTDIR)/\"" -std=c++0x -c v8binding.cc
 
 jsv8.o: v8binding.h jsdef.h jsv8.h jsv8.c
-	$(CC) $(CFLAGS) -Wall $(INCLUDES) -c jsv8.c
+	$(CC) $(CFLAGS) $(INCLUDES) -c jsv8.c
 
 util.o: util.h util.c
-	$(CC) $(CFLAGS) -Wall $(INCLUDES) -c util.c
+	$(CC) $(CFLAGS) $(INCLUDES) -c util.c
 
 libmilljs.a: v8binding.o jsv8.o util.o
 	ar rcs $@ $^
 
 testjs.o: jsv8.h testjs.c
-	$(CC) $(CFLAGS) -Wall $(INCLUDES) -c testjs.c
+	$(CC) $(CFLAGS) $(INCLUDES) -c testjs.c
 
 testjs: testjs.o libmilljs.a
 	$(CC) -o $@ $^ $(V8_LIBS) $(LIBS) -lm -lstdc++

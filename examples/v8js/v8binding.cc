@@ -75,7 +75,6 @@ extern js_coro *choose_coro(chan ch, int64_t ddline);
 
 static inline js_handle *make_handle(js_vm *vm,
             Local<Value> value, enum js_code type);
-static struct js_handle_s *v8ExternalPtr(js_vm *vm, void *ptr);
 static void *ExternalPtrValue(Local <Value> v);
 
 void js_set_errstr(js_vm *vm, const char *str) {
@@ -87,28 +86,38 @@ void js_set_errstr(js_vm *vm, const char *str) {
         vm->errstr = estrdup(str, strlen(str));
 }
 
-static void SetError(js_vm *vm, Isolate *isolate,
-        TryCatch *try_catch) {
-    js_set_errstr(vm, GetExceptionString(isolate, try_catch));
+static void SetError(js_vm *vm, TryCatch *try_catch) {
+    js_set_errstr(vm, GetExceptionString(vm->isolate, try_catch));
 }
 
 static void Print(const FunctionCallbackInfo<Value>& args) {
     bool first = true;
-    int fd = fileno(stdout);
-    ssize_t rc;
-    for (int i = 0; i < args.Length(); i++) {
-        HandleScope handle_scope(args.GetIsolate());
+    int errcount = 0;
+    Isolate *isolate = args.GetIsolate();
+    LOCK_SCOPE(isolate);
+
+    for (int i = 0; i < args.Length() && errcount == 0; i++) {
         if (first) {
             first = false;
         } else {
-            rc = write(fd, " ", 1);
+            printf(" ");
         }
-        String::Utf8Value str(args[i]);
-        // * operator returns NULL in case the conversion failed.
-        const char* cstr = *str ? *str : "(null)";
-        rc = write(fd, cstr, strlen(cstr));
+        Local<String> s;
+        if (!args[i]->ToString(isolate->GetCurrentContext()).ToLocal(&s)) {
+            errcount++;
+        } else {
+            String::Utf8Value str(s);
+            int n = static_cast<int>(
+                        fwrite(*str, sizeof(**str), str.length(), stdout));
+            if (n != str.length())
+                errcount++;
+        }
     }
-    rc = write(fd, "\n", 1);
+    if (!errcount) {
+        printf("\n");
+        fflush(stdout);
+    } else
+        ThrowError(isolate, "error writing to stdout");
 }
 
 static void Now(const FunctionCallbackInfo<Value>& args) {
@@ -122,19 +131,16 @@ static void Now(const FunctionCallbackInfo<Value>& args) {
 static void MSleep(const FunctionCallbackInfo<Value>& args) {
     int64_t n = 0;
     {
-
     Isolate *isolate = args.GetIsolate();
-    js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
     LOCK_SCOPE(isolate)
-    Local<Context> context = Local<Context>::New(isolate, vm->context);
     if (args.Length() > 0)
-        n = args[0]->IntegerValue(context).FromJust();
-
+        n = args[0]->IntegerValue(
+                    isolate->GetCurrentContext()).FromJust();
     }
     mill_sleep(now()+n);
 }
 
-//  $go(coro, inval, callback)
+// $go(coro, inval, callback)
 static void Go(const FunctionCallbackInfo<Value>& args) {
     js_coro *cr;
     Fncoro_t fn;
@@ -196,7 +202,7 @@ static int RunCoroCallback(js_vm *vm, js_coro *cr) {
     delete cr;
 
     assert(!try_catch.HasCaught());
-    Local<Value> result = cb->Call(context->Global(), 2, args);
+    cb->Call(context->Global(), 2, args);
     if (try_catch.HasCaught()) {
         /* FIXME ? */
         char *errstr = GetExceptionString(isolate, &try_catch);
@@ -249,6 +255,7 @@ static void Send(const FunctionCallbackInfo<Value>& args) {
 
 static void Close(const FunctionCallbackInfo<Value>& args) {
     Isolate *isolate = args.GetIsolate();
+    LOCK_SCOPE(isolate);
     js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
     mill_pipeclose(vm->inq);
 }
@@ -260,8 +267,6 @@ static void CallForeignFunc(
     js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
 
     LOCK_SCOPE(isolate)
-    Local<Context> context = Local<Context>::New(isolate, vm->context);
-    Context::Scope context_scope(context);
     Local<Object> obj = args.Holder();
 
     assert(obj->InternalFieldCount() == 2);
@@ -344,7 +349,7 @@ static void v8init(void) {
     v8initialized = 1;
 }
 
-/* Start a $send() coroutine in the main thread. */
+// Start a $send() coroutine in the main thread.
 coroutine static void start_coro(mill_pipe p) {
     while (1) {
         int done;
@@ -357,7 +362,7 @@ coroutine static void start_coro(mill_pipe p) {
     }
 }
 
-/* Invoked by the main thread. */
+// Invoked by the main thread.
 js_vm *js8_vmnew(mill_worker w) {
     js_vm *vm = new js_vm;
     vm->w = w;
@@ -373,7 +378,7 @@ js_vm *js8_vmnew(mill_worker w) {
 }
 
 static void GlobalGet(Local<Name> name,
-    const PropertyCallbackInfo<Value>& info) {
+        const PropertyCallbackInfo<Value>& info) {
     Isolate *isolate = info.GetIsolate();
     LOCK_SCOPE(isolate);
     String::Utf8Value str(name);
@@ -382,17 +387,16 @@ static void GlobalGet(Local<Name> name,
 }
 
 static void GlobalSet(Local<Name> name, Local<Value> val,
-    const PropertyCallbackInfo<void>& info) {
+        const PropertyCallbackInfo<void>& info) {
     Isolate *isolate = info.GetIsolate();
-    js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
     LOCK_SCOPE(isolate)
-    Local<Context> context = Local<Context>::New(isolate, vm->context);
     String::Utf8Value str(name);
     if (strcmp(*str, "$errno") == 0)
-        errno = val->ToInt32(context).ToLocalChecked()->Value();
+        errno = val->ToInt32(
+                isolate->GetCurrentContext()).ToLocalChecked()->Value();
 }
 
-/* Receive coroutine with result from the main thread. */
+// Receive coroutine with result from the main thread.
 coroutine static void recv_coro(js_vm *vm) {
     while (1) {
         int done;
@@ -407,8 +411,8 @@ coroutine static void recv_coro(js_vm *vm) {
     }
 }
 
-/* The second part of the vm initialization. Runs in the worker thread. */
-static int CreateIsolate(js_vm *vm) {
+// The second part of the vm initialization.
+static void CreateIsolate(js_vm *vm) {
     v8init();
     Isolate* isolate = Isolate::New(create_params);
 
@@ -437,7 +441,11 @@ static int CreateIsolate(js_vm *vm) {
                 FunctionTemplate::New(isolate, Close));
 
     Local<Context> context = Context::New(isolate, NULL, global);
-
+    if (context.IsEmpty()) {
+        /* FIXME: don't bail out. */
+        fprintf(stderr, "failed to create a V8 context\n");
+        exit(1);
+    }
     // Name the global object "Global".
     Local<Object> realGlobal = Local<Object>::Cast(context->Global()->GetPrototype());
     realGlobal->Set(String::NewFromUtf8(isolate, "Global"), realGlobal);
@@ -468,9 +476,9 @@ static int CreateIsolate(js_vm *vm) {
     vm->null_handle->vm = vm;
     vm->null_handle->type = V8NULL;
     vm->null_handle->handle.Reset(vm->isolate, v8::Null(isolate));
-    return 0;
 }
 
+// Runs in the worker(V8) thread.
 int js8_vminit(js_vm *vm) {
     CreateIsolate(vm);
     go(recv_coro(vm));
@@ -578,7 +586,7 @@ int js_isundefined(js_handle *h) {
     return (!h || h->type == V8UNDEFINED);
 }
 
-static js_handle *v8CompileRun(js_vm *vm, const char *src) {
+static js_handle *CompileRun(js_vm *vm, const char *src) {
     Isolate *isolate = vm->isolate;
 
     LOCK_SCOPE(isolate)
@@ -596,13 +604,13 @@ static js_handle *v8CompileRun(js_vm *vm, const char *src) {
     ScriptOrigin origin(name);
     Local<Script> script;
     if (!Script::Compile(context, source, &origin).ToLocal(&script)) {
-        SetError(vm, isolate, &try_catch);
+        SetError(vm, &try_catch);
         return NULL;
     }
 
     Handle<Value> result;
     if (!script->Run(context).ToLocal(&result)) {
-        SetError(vm, isolate, &try_catch);
+        SetError(vm, &try_catch);
         return NULL;
     }
     assert(!result.IsEmpty());
@@ -838,7 +846,7 @@ void js_dispose(js_handle *h) {
     }
 }
 
-static js_handle *v8Call(struct js8_arg_s *args) {
+static js_handle *CallFunc(struct js8_arg_s *args) {
     js_vm *vm = args->vm;
     Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate)
@@ -849,7 +857,7 @@ static js_handle *v8Call(struct js8_arg_s *args) {
     if (args->type == V8CALLSTR) {
         // function expression
         assert(args->source);
-        js_handle *result = v8CompileRun(vm, args->source);
+        js_handle *result = CompileRun(vm, args->source);
         if (!result)
             return NULL;
         v1 = Local<Value>::New(isolate, result->handle);
@@ -880,7 +888,7 @@ static js_handle *v8Call(struct js8_arg_s *args) {
 
     Local<Value> result = func->Call(self, argc, argv);
     if (try_catch.HasCaught()) {
-        SetError(vm, isolate, &try_catch);
+        SetError(vm, &try_catch);
         return NULL;
     }
     return make_handle(vm, result, V8UNKNOWN);
@@ -890,12 +898,12 @@ int js8_do(struct js8_arg_s *args) {
     switch (args->type) {
     case V8COMPILERUN:
         assert(args->vm->ncoro == 0);
-        args->h = v8CompileRun(args->vm, args->source);
+        args->h = CompileRun(args->vm, args->source);
         WaitFor(args->vm);
         break;
     case V8CALL:
     case V8CALLSTR:
-        args->h = v8Call(args);
+        args->h = CallFunc(args);
         WaitFor(args->vm);
         break;
     case V8GC:
