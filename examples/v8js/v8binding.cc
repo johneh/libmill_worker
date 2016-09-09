@@ -94,7 +94,7 @@ static void Print(const FunctionCallbackInfo<Value>& args) {
     bool first = true;
     int errcount = 0;
     Isolate *isolate = args.GetIsolate();
-    LOCK_SCOPE(isolate);
+    HandleScope handle_scope(isolate);
 
     for (int i = 0; i < args.Length() && errcount == 0; i++) {
         if (first) {
@@ -122,7 +122,7 @@ static void Print(const FunctionCallbackInfo<Value>& args) {
 
 static void Now(const FunctionCallbackInfo<Value>& args) {
     Isolate *isolate = args.GetIsolate();
-    LOCK_SCOPE(isolate)
+    HandleScope handle_scope(isolate);
     int64_t n = now();
     args.GetReturnValue().Set(Number::New(isolate, n));
 }
@@ -132,7 +132,7 @@ static void MSleep(const FunctionCallbackInfo<Value>& args) {
     int64_t n = 0;
     {
     Isolate *isolate = args.GetIsolate();
-    LOCK_SCOPE(isolate)
+    HandleScope handle_scope(isolate);
     if (args.Length() > 0)
         n = args[0]->IntegerValue(
                     isolate->GetCurrentContext()).FromJust();
@@ -148,11 +148,10 @@ static void Go(const FunctionCallbackInfo<Value>& args) {
 
     {
     Isolate *isolate = args.GetIsolate();
+    HandleScope handle_scope(isolate);
     int argc = args.Length();
 	ThrowNotEnoughArgs(isolate, argc < 3);
     vm = static_cast<js_vm*>(isolate->GetData(0));
-
-    LOCK_SCOPE(isolate)
     fn = (Fncoro_t) ExternalPtrValue(args[0]);
     if (!fn)
         ThrowTypeError(isolate, "$go argument #1: coroutine expected");
@@ -174,8 +173,8 @@ static void Go(const FunctionCallbackInfo<Value>& args) {
 // callback(err, data)
 static int RunCoroCallback(js_vm *vm, js_coro *cr) {
     Isolate *isolate = vm->isolate;
-    vm->ncoro--;
     LOCK_SCOPE(isolate)
+    vm->ncoro--;
     TryCatch try_catch(isolate);
 
     Local<Context> context = Local<Context>::New(isolate, vm->context);
@@ -231,11 +230,11 @@ static void Send(const FunctionCallbackInfo<Value>& args) {
 
     {
     Isolate *isolate = args.GetIsolate();
+    HandleScope handle_scope(isolate);
     int argc = args.Length();
     ThrowNotEnoughArgs(isolate, argc < 3);
     vm = static_cast<js_vm*>(isolate->GetData(0));
 
-    LOCK_SCOPE(isolate)
     void *fn = ExternalPtrValue(args[0]);
     if (!fn)
         ThrowTypeError(isolate, "$send argument #1: coroutine expected");
@@ -255,7 +254,7 @@ static void Send(const FunctionCallbackInfo<Value>& args) {
 
 static void Close(const FunctionCallbackInfo<Value>& args) {
     Isolate *isolate = args.GetIsolate();
-    LOCK_SCOPE(isolate);
+    HandleScope handle_scope(isolate);
     js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
     mill_pipeclose(vm->inq);
 }
@@ -264,9 +263,9 @@ static void CallForeignFunc(
         const v8::FunctionCallbackInfo<v8::Value>& args) {
 
     Isolate *isolate = args.GetIsolate();
+    HandleScope handle_scope(isolate);
     js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
 
-    LOCK_SCOPE(isolate)
     Local<Object> obj = args.Holder();
 
     assert(obj->InternalFieldCount() == 2);
@@ -380,7 +379,7 @@ js_vm *js8_vmnew(mill_worker w) {
 static void GlobalGet(Local<Name> name,
         const PropertyCallbackInfo<Value>& info) {
     Isolate *isolate = info.GetIsolate();
-    LOCK_SCOPE(isolate);
+    HandleScope handle_scope(isolate);
     String::Utf8Value str(name);
     if (strcmp(*str, "$errno") == 0)
         info.GetReturnValue().Set(Integer::New(isolate, errno));
@@ -389,7 +388,7 @@ static void GlobalGet(Local<Name> name,
 static void GlobalSet(Local<Name> name, Local<Value> val,
         const PropertyCallbackInfo<void>& info) {
     Isolate *isolate = info.GetIsolate();
-    LOCK_SCOPE(isolate)
+    HandleScope handle_scope(isolate);
     String::Utf8Value str(name);
     if (strcmp(*str, "$errno") == 0)
         errno = val->ToInt32(
@@ -415,11 +414,10 @@ coroutine static void recv_coro(js_vm *vm) {
 static void CreateIsolate(js_vm *vm) {
     v8init();
     Isolate* isolate = Isolate::New(create_params);
-
+    LOCK_SCOPE(isolate)
     isolate->AddMicrotasksCompletedCallback(v8MicrotasksCompleted);
     isolate->EnqueueMicrotask(v8Microtask, vm);
 
-    LOCK_SCOPE(isolate)
     vm->isolate = isolate;
     vm->errstr = nullptr;
 
@@ -496,12 +494,18 @@ void js8_vmclose(js_vm *vm) {
     // Close vm->outq; This causes the receiving coroutine (recv_coro)
     // to exit the loop and free vm->outq.
     //
+    Isolate *isolate = vm->isolate;
+
+    {
+    Locker locker(isolate);
+
     mill_pipeclose(vm->outq);
     mill_pipefree(vm->inq);
 
     if (vm->errstr)
         free(vm->errstr);
-    vm->isolate->Dispose();
+    }
+    isolate->Dispose();
     delete vm;
 }
 
