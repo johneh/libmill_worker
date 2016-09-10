@@ -96,6 +96,8 @@ static void Print(const FunctionCallbackInfo<Value>& args) {
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
 
+    assert(!isolate->GetCurrentContext().IsEmpty());
+
     for (int i = 0; i < args.Length() && errcount == 0; i++) {
         if (first) {
             first = false;
@@ -177,8 +179,10 @@ static int RunCoroCallback(js_vm *vm, js_coro *cr) {
     vm->ncoro--;
     TryCatch try_catch(isolate);
 
+    // GetCurrentContext() is empty if called from WaitFor().
     Local<Context> context = Local<Context>::New(isolate, vm->context);
     Context::Scope context_scope(context);
+
     Local<Function> cb = Local<Function>::Cast(
                 Local<Value>::New(isolate, cr->callback->handle));
     js_dispose(cr->callback);
@@ -415,6 +419,9 @@ static void CreateIsolate(js_vm *vm) {
     v8init();
     Isolate* isolate = Isolate::New(create_params);
     LOCK_SCOPE(isolate)
+
+    assert(isolate->GetCurrentContext().IsEmpty());
+
     isolate->AddMicrotasksCompletedCallback(v8MicrotasksCompleted);
     isolate->EnqueueMicrotask(v8Microtask, vm);
 
@@ -466,13 +473,17 @@ static void CreateIsolate(js_vm *vm) {
             GlobalGet, GlobalSet).FromJust();
 
     vm->global_handle = make_handle(vm, realGlobal, V8OBJECT);
+    vm->global_handle->flags |= PERM_HANDLE;
     vm->undef_handle = new js_handle_s;
     vm->undef_handle->vm = vm;
     vm->undef_handle->type = V8UNDEFINED;
+    vm->undef_handle->flags = PERM_HANDLE;
     vm->undef_handle->handle.Reset(vm->isolate, v8::Undefined(isolate));
     vm->null_handle = new js_handle_s;
     vm->null_handle->vm = vm;
     vm->null_handle->type = V8NULL;
+    vm->null_handle->flags = PERM_HANDLE;
+
     vm->null_handle->handle.Reset(vm->isolate, v8::Null(isolate));
 }
 
@@ -484,7 +495,7 @@ int js8_vminit(js_vm *vm) {
 }
 
 const char *js_errstr(js_vm *vm) {
-    return vm->errstr ? vm->errstr : "(null)";
+    return vm->errstr;
 }
 
 // Invoked by the main thread.
@@ -527,6 +538,7 @@ static js_handle *make_handle(js_vm *vm,
 
     h = new js_handle_s;
     h->vm = vm;
+    h->flags = 0;
     if (type) {
         h->type = type;
         h->handle.Reset(vm->isolate, value);
@@ -555,39 +567,40 @@ static js_handle *make_handle(js_vm *vm,
 }
 
 int js_isnumber(js_handle *h) {
-    return (h && h->type == V8NUMBER);
+    return (h->type == V8NUMBER);
 }
 
 int js_isfunction(js_handle *h) {
-    return (h && h->type == V8FUNC);
+    return (h->type == V8FUNC);
 }
 
 int js_isobject(js_handle *h) {
-    return (h && (h->type == V8OBJECT
-            || h->type == V8ARRAY
-            || h->type == V8FUNC
-            || h->type == V8EXTPTR
-            || h->type == V8EXTFUNC));
+    if (h->type == V8OBJECT)
+        return 1;
+    Isolate *isolate = h->vm->isolate;
+    LOCK_SCOPE(isolate);
+    Local<Value> v1 = Local<Value>::New(isolate, h->handle);
+    return !!v1->IsObject();
 }
 
 int js_isarray(js_handle *h) {
-    return (h && h->type == V8ARRAY);
+    return (h->type == V8ARRAY);
 }
 
 int js_ispointer(js_handle *h) {
-    return (h && h->type == V8EXTPTR);
+    return (h->type == V8EXTPTR);
 }
 
 int js_isstring(js_handle *h) {
-    return (h && h->type == V8STRING);
+    return (h->type == V8STRING);
 }
 
 int js_isnull(js_handle *h) {
-    return (h && h->type == V8NULL);
+    return (h->type == V8NULL);
 }
 
 int js_isundefined(js_handle *h) {
-    return (!h || h->type == V8UNDEFINED);
+    return (h->type == V8UNDEFINED);
 }
 
 static js_handle *CompileRun(js_vm *vm, const char *src) {
@@ -632,7 +645,19 @@ js_handle *js_string(js_vm *vm, const char *stp, int length) {
 js_handle *js_number(js_vm *vm, double d) {
     Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate)
-    return make_handle(vm, Number::New(isolate, d), V8NUMBER);
+    js_handle *h = make_handle(vm, Number::New(isolate, d), V8NUMBER);
+    h->flags |= DBL_HANDLE;
+    h->d = d;
+    return h;
+}
+
+js_handle *js_int32(js_vm *vm, int32_t i) {
+    Isolate *isolate = vm->isolate;
+    LOCK_SCOPE(isolate)
+    js_handle *h = make_handle(vm, Integer::New(isolate, i), V8NUMBER);
+    h->flags |= INT32_HANDLE;
+    h->i = i;
+    return h;
 }
 
 js_handle *js_object(js_vm *vm) {
@@ -748,7 +773,10 @@ js_handle *js_pointer(js_vm *vm, void *ptr) {
     void *ptr1 = reinterpret_cast<void*>(static_cast<uintptr_t>(V8EXTPTR<<2));
     obj->SetAlignedPointerInInternalField(0, ptr1);
     obj->SetInternalField(1, External::New(isolate, ptr));
-    return make_handle(vm, obj, V8EXTPTR);
+    js_handle *h = make_handle(vm, obj, V8EXTPTR);
+    h->flags |= PTR_HANDLE;
+    h->ptr = ptr;
+    return h;
 }
 
 // XXX: returns NULL if not V8EXTPTR!
@@ -794,58 +822,106 @@ void js_send(js_coro *cr, js_handle *oh, int err) {
     }
 }
 
-// Returns a malloced copy
-char *js_tostring(js_handle *h) {
+const char *js_tostring(js_handle *h) {
     js_vm *vm = h->vm;
     Isolate *isolate = vm->isolate;
-    LOCK_SCOPE(isolate);
+    Locker locker(isolate);
+    if (h->type == V8STRING && (h->flags & STR_HANDLE) != 0) {
+        return h->stp;
+    }
+    Isolate::Scope isolate_scope(isolate);
+    HandleScope handle_scope(isolate);
+    if ((h->flags & STR_HANDLE) != 0)
+        free(h->stp);
+    h->flags &= ~VALUE_MASK;
     Local<Context> context = Local<Context>::New(isolate, vm->context);
     Local<String> s = Local<Value>::New(isolate, h->handle)
-                -> ToString(context).ToLocalChecked();
+                    -> ToString(context).ToLocalChecked();
     String::Utf8Value stval(s);
 #if 0
     if (!*stval)    // conversion error
         return NULL;
 #endif
     /* return empty string if conversion error */
-    return estrdup(*stval, stval.length());
+    h->stp = estrdup(*stval, stval.length());
+    h->flags |= STR_HANDLE;
+    return h->stp;
 }
 
 double js_tonumber(js_handle *h) {
     Isolate *isolate = h->vm->isolate;
-    LOCK_SCOPE(isolate);
+    Locker locker(isolate);
+    if (h->type == V8NUMBER && (h->flags & DBL_HANDLE) != 0) {
+        return h->d;
+    }
+    Isolate::Scope isolate_scope(isolate);
+    HandleScope handle_scope(isolate);
     Local<Context> context = Local<Context>::New(isolate, h->vm->context);
-    return Local<Value>::New(isolate, h->handle)
+    double d = Local<Value>::New(isolate, h->handle)
                 -> ToNumber(context).ToLocalChecked()->Value();
+    if (h->type == V8NUMBER) {
+        if (h->flags & STR_HANDLE)
+            free(h->stp);
+        h->flags &= ~VALUE_MASK;
+        h->flags |= DBL_HANDLE;
+        h->d = d;
+    }
+    return d;
 }
 
-const void *js_topointer(js_handle *h) {
+int32_t js_toint32(js_handle *h) {
+    Isolate *isolate = h->vm->isolate;
+    Locker locker(isolate);
+    if (h->type == V8NUMBER && (h->flags & INT32_HANDLE) != 0) {
+        return h->i;
+    }
+    Isolate::Scope isolate_scope(isolate);
+    HandleScope handle_scope(isolate);
+    Local<Context> context = Local<Context>::New(isolate, h->vm->context);
+    int32_t i = Local<Value>::New(isolate, h->handle)
+                    -> ToInt32(context).ToLocalChecked()->Value();
+    if (h->type == V8NUMBER) {
+        if (h->flags & STR_HANDLE)
+            free(h->stp);
+        h->flags &= ~VALUE_MASK;
+        h->flags |= INT32_HANDLE;
+        h->i = i;
+    }
+    return i;
+}
+
+void *js_topointer(js_handle *h) {
     js_vm *vm = h->vm;
     Isolate *isolate = vm->isolate;
-    LOCK_SCOPE(isolate);
-    if (h->type != V8EXTPTR) {
-        js_set_errstr(vm, "js_topointer: pointer argument expected");
-        return nullptr;
-    }
+    Locker locker(isolate);
     // Clear error
     js_set_errstr(vm, nullptr);
-    Local<Context> context = Local<Context>::New(isolate, vm->context);
-    Local<Object> obj = Local<Value>::New(isolate, h->handle)
-                    -> ToObject(context).ToLocalChecked();
-    return Local<External>::Cast(obj->GetInternalField(1))->Value();
+    if (h->type == V8EXTPTR && (h->flags & PTR_HANDLE) != 0) {
+        return h->ptr;
+    }
+
+    void *ptr;
+    Isolate::Scope isolate_scope(isolate);
+    HandleScope handle_scope(isolate);
+    if (h->type != V8EXTPTR) {
+        js_set_errstr(vm, "js_topointer: pointer argument expected");
+        ptr = nullptr;
+    } else {
+        Local<Object> obj = Local<Object>::Cast(
+                                Local<Value>::New(isolate, h->handle));
+        ptr = Local<External>::Cast(obj->GetInternalField(1))->Value();
+    }
+    return ptr;
 }
 
 void js_dispose(js_handle *h) {
-    if (h) {
-        js_vm *vm = h->vm;
-        Locker locker(vm->isolate);
-        Isolate::Scope isolate_scope(vm->isolate);
-        if (vm->global_handle == h
-                || vm->null_handle == h
-                || vm->undef_handle == h
-        )
-            return;
+    Isolate *isolate = h->vm->isolate;
+    Locker locker(isolate);
+    if ((h->flags & PERM_HANDLE) == 0) {
+        Isolate::Scope isolate_scope(isolate); // more than one isolate in worker ???
         h->handle.Reset();
+        if (h->flags & STR_HANDLE)
+            free(h->stp);
         delete h;
     }
 }

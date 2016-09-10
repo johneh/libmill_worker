@@ -14,6 +14,7 @@ extern js_handle *js_callstr(js_vm *vm, const char *source,
 
 extern js_handle *js_string(js_vm *vm, const char *stp, int length);
 extern js_handle *js_number(js_vm *vm, double d);
+extern js_handle *js_int32(js_vm *vm, int32_t i);
 extern js_handle *js_object(js_vm *vm);
 extern js_handle *js_get(js_handle *hobj, const char *key);
 extern int js_set(js_handle *hobj, const char *key, js_handle *hval);
@@ -33,9 +34,10 @@ extern js_handle *js_ffn(js_vm *vm, const js_ffn_t *func_wrap);
 
 extern void js_dispose(js_handle *h);
 
-extern const void *js_topointer(js_handle *h);
-extern char *js_tostring(js_handle *h);
+extern void *js_topointer(js_handle *h);
+extern const char *js_tostring(js_handle *h);
 extern double js_tonumber(js_handle *h);
+extern int32_t js_toint32(js_handle *h);
 
 extern int js_isnumber(js_handle *h);
 extern int js_isfunction(js_handle *h);

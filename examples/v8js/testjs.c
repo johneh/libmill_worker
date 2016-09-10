@@ -44,7 +44,7 @@ void testcall(js_vm *vm) {
 
 coroutine void do_task1(js_vm *vm, js_coro *cr, js_handle *inh) {
     yield();
-    char *s1 = js_tostring(inh);
+    const char *s1 = js_tostring(inh);
     fprintf(stderr, "<- %s\n", s1);
     int k = random() % 50;
     mill_sleep(now() + k);
@@ -52,7 +52,6 @@ coroutine void do_task1(js_vm *vm, js_coro *cr, js_handle *inh) {
     sprintf(tmp, "%s -> Task done in %d millsecs ...", s1, k);
     js_handle *oh = js_string(vm, tmp, strlen(tmp));
     js_send(cr, oh, 0);  /* oh and inh disposed by V8 */
-    free(s1);
 }
 
 /* Coroutine in the V8 thread (concurrency) */
@@ -124,10 +123,9 @@ void testsend(js_vm *vm) {
 static char *readfile(const char *filename, size_t *len);
 
 js_handle *ff_readfile(js_vm *vm, int argc, js_handle *argv[]) {
-    char *filename = js_tostring(argv[0]);
+    const char *filename = js_tostring(argv[0]);
     size_t sz;
     char *buf = readfile(filename, & sz);
-    free(filename);
     js_handle *ret;
     if (buf) {
         ret = js_string(vm, buf, sz);
