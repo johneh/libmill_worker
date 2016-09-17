@@ -29,6 +29,7 @@ enum js_code {
     V8OBJECT,
     V8ARRAY,
     V8FUNC,
+    V8ERROR,
     V8COMPILERUN,
     V8CALL,
     V8CALLSTR,

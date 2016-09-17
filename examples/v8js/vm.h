@@ -1,6 +1,8 @@
 #ifndef _VM_H
 #define _VM_H
 
+#define MAXARGS 10
+
 // V8 state (Isolate)
 
 struct js_vm_s {
@@ -22,6 +24,8 @@ struct js_vm_s {
     v8::Persistent<v8::Context> context;
     v8::Persistent<v8::ObjectTemplate> extptr_template;
     v8::Persistent<v8::ObjectTemplate> extfunc_template;
+
+    js_handle *args[MAXARGS];
 };
 
 #define GetCtypeId(obj) ((obj)->InternalFieldCount() != 2 ? 0 \
@@ -40,6 +44,7 @@ struct js_handle_s {
 #define STR_HANDLE  (1 << 2)
 #define INT32_HANDLE    (1 << 3)
 #define VALUE_MASK (DBL_HANDLE|STR_HANDLE|INT32_HANDLE)
+#define ARG_HANDLE  (1 << 4)
 
     union {
         double d;

@@ -71,7 +71,8 @@ fprintf(stderr, format , ## args);
 #endif
 
 extern js_coro *choose_coro(chan ch, int64_t ddline);
-
+static js_handle *init_handle(js_vm *vm,
+            js_handle *h, Local<Value> value);
 static inline js_handle *make_handle(js_vm *vm,
             Local<Value> value, enum js_code type);
 static void *ExternalPtrValue(Local <Value> v);
@@ -283,21 +284,35 @@ static void CallForeignFunc(
             obj->GetAlignedPointerFromInternalField(1));
 
     int argc = args.Length();
-#define MAXARGS 10
     if (argc > MAXARGS || argc != func_wrap->pcount)
-        ThrowError(isolate, "function called with incorrect # of arguments");
-    js_handle *ah[MAXARGS];
+        ThrowError(isolate, "C-function called with incorrect # of arguments");
     for (int i = 0; i < argc; i++)
-        ah[i] = make_handle(vm, args[i], V8UNKNOWN);
-    js_handle *rh = func_wrap->fp(vm, argc, ah);
-    if (!rh) /* uncaught error ?*/
-        rh = vm->null_handle;
-    Local<Value> rv = Local<Value>::New(isolate, rh->handle);
-    for (int i = 0; i < argc; i++)
-        js_reset(ah[i]);
-    js_reset(rh);
-    args.GetReturnValue().Set(rv);
-#undef MAXARGS
+        (void) init_handle(vm, vm->args[i], args[i]);
+    int err = 0;
+    js_handle *hret = func_wrap->fp(vm, argc, vm->args);
+    Local<Value> retv = Local<Value>();
+    if (!hret) {
+        retv = v8::Null(isolate);
+    } else {
+        assert(!(hret->flags & ARG_HANDLE)); // XXX: should bail out.
+        retv = Local<Value>::New(isolate, hret->handle);
+        if (hret->type == V8ERROR)  // From js_error().
+            err = 1;
+        js_reset(hret);
+    }
+    for (int i = 0; i < argc; i++) {
+        js_handle *h = vm->args[i];
+        assert(! (h->flags & PERM_HANDLE));
+        h->handle.Reset();
+        if (h->flags & STR_HANDLE)
+            free(h->stp);
+        h->flags = ARG_HANDLE;
+    }
+
+    if (err)
+        isolate->ThrowException(retv);
+    else
+        args.GetReturnValue().Set(retv);
 }
 
 static void WaitFor(js_vm *vm) {
@@ -382,6 +397,7 @@ js_vm *js8_vmnew(mill_worker w) {
     vm->ch = mill_chmake(sizeof (js_coro *), 5); // XXX: How to select a bufsize??
     assert(vm->ch);
     vm->ncoro = 0;
+    vm->errstr = nullptr;
     go(start_coro(vm->inq));
     return vm;
 }
@@ -432,7 +448,13 @@ static void CreateIsolate(js_vm *vm) {
     isolate->EnqueueMicrotask(v8Microtask, vm);
 
     vm->isolate = isolate;
-    vm->errstr = nullptr;
+
+    js_handle *hargs = new js_handle[MAXARGS];
+    for (int i = 0; i < MAXARGS; i++) {
+        hargs[i].vm = vm;
+        hargs[i].flags = ARG_HANDLE;
+        vm->args[i] = &hargs[i];
+    }
 
     // isolate->SetCaptureStackTraceForUncaughtExceptions(true);
     isolate->SetData(0, vm);
@@ -521,6 +543,7 @@ void js8_vmclose(js_vm *vm) {
 
     if (vm->errstr)
         free(vm->errstr);
+    delete [] vm->args[0];
     }
     isolate->Dispose();
     delete vm;
@@ -534,22 +557,8 @@ const js_handle *js_null(js_vm *vm) {
     return vm->null_handle;
 }
 
-static js_handle *make_handle(js_vm *vm,
-        Local<Value> value, enum js_code type) {
-    js_handle *h;
-    if (value->IsNull())
-        return vm->null_handle;
-    if (value->IsUndefined())
-        return vm->undef_handle;
-
-    h = new js_handle_s;
-    h->vm = vm;
-    h->flags = 0;
-    if (type) {
-        h->type = type;
-        h->handle.Reset(vm->isolate, value);
-        return h;
-    }
+static js_handle *init_handle(js_vm *vm,
+            js_handle *h, Local<Value> value) {
     if (value->IsFunction())
         h->type = V8FUNC;
     else if (value->IsString())
@@ -564,17 +573,39 @@ static js_handle *make_handle(js_vm *vm,
         int id = GetCtypeId(obj);
         if (id > 0) {
             if (IsCtypeWeak(obj)) {
-                // Bailing out for now.
-                fprintf(stderr, "js error: (weak) c-type cannot be exported\n");
+                /* No song and dance please. */
+                fprintf(stderr, "error: (weak) ctype object cannot be exported\n");
                 exit(1);
             }
             h->type = (enum js_code) id;
         } else
             h->type = V8OBJECT;
-    } else
+    } else if (value->IsNull())
+        h->type = V8NULL;
+    else if (value->IsUndefined())
+        h->type = V8UNDEFINED;
+    else
         h->type = V8UNKNOWN;
     h->handle.Reset(vm->isolate, value);
     return h;
+}
+
+static js_handle *make_handle(js_vm *vm,
+            Local<Value> value, enum js_code type) {
+    js_handle *h;
+    if (value->IsNull())
+        return vm->null_handle;
+    if (value->IsUndefined())
+        return vm->undef_handle;
+    h = new js_handle_s;
+    h->flags = 0;
+    h->vm = vm;
+    if (type) {
+        h->type = type;
+        h->handle.Reset(vm->isolate, value);
+        return h;
+    }
+    return init_handle(vm, h, value);
 }
 
 int js_isnumber(js_handle *h) {
@@ -848,6 +879,14 @@ void *js_externalize(js_handle *h) {
     return ptr;
 }
 
+// JS exception object.
+js_handle *js_error(js_vm *vm, const char *message) {
+    Isolate *isolate = vm->isolate;
+    LOCK_SCOPE(isolate)
+    return make_handle(vm, Exception::Error(
+                    String::NewFromUtf8(isolate, message)), V8ERROR);
+}
+
 js_handle *js_pointer(js_vm *vm, void *ptr) {
     Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate);
@@ -1005,7 +1044,7 @@ void *js_topointer(js_handle *h) {
 void js_reset(js_handle *h) {
     Isolate *isolate = h->vm->isolate;
     Locker locker(isolate);
-    if ((h->flags & PERM_HANDLE) == 0) {
+    if ((h->flags & (PERM_HANDLE|ARG_HANDLE)) == 0) {
         Isolate::Scope isolate_scope(isolate); // more than one isolate in worker ???
         h->handle.Reset();
         if (h->flags & STR_HANDLE)
@@ -1027,7 +1066,7 @@ void js_dispose(js_handle *h, Fnfree free_func) {
     Isolate *isolate = h->vm->isolate;
     Locker locker(isolate);
     if (free_func && h->type == V8EXTPTR
-            && (h->flags & PERM_HANDLE) == 0
+            && (h->flags & (PERM_HANDLE|ARG_HANDLE)) == 0
     ) {
         Isolate::Scope isolate_scope(isolate);
         HandleScope handle_scope(isolate);
