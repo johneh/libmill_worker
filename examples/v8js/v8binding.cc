@@ -89,6 +89,13 @@ static void SetError(js_vm *vm, TryCatch *try_catch) {
     js_set_errstr(vm, GetExceptionString(vm->isolate, try_catch));
 }
 
+static int IsCtypeWeak(Local<Object> obj) {
+    assert(obj->InternalFieldCount() == 2);
+    int id = static_cast<int>(reinterpret_cast<uintptr_t>(
+                obj->GetAlignedPointerFromInternalField(0)) >> 1);
+    return (id & 1);
+}
+
 static void Print(const FunctionCallbackInfo<Value>& args) {
     bool first = true;
     int errcount = 0;
@@ -144,7 +151,7 @@ static void MSleep(const FunctionCallbackInfo<Value>& args) {
 // $go(coro, inval, callback)
 static void Go(const FunctionCallbackInfo<Value>& args) {
     js_coro *cr;
-    Fncoro_t fn;
+    Fncoro fn;
     js_vm *vm;
 
     {
@@ -153,7 +160,7 @@ static void Go(const FunctionCallbackInfo<Value>& args) {
     int argc = args.Length();
     ThrowNotEnoughArgs(isolate, argc < 3);
     vm = static_cast<js_vm*>(isolate->GetData(0));
-    fn = (Fncoro_t) ExternalPtrValue(args[0]);
+    fn = (Fncoro) ExternalPtrValue(args[0]);
     if (!fn)
         ThrowTypeError(isolate, "$go argument #1: coroutine expected");
     if (!args[2]->IsFunction())
@@ -184,7 +191,7 @@ static int RunCoroCallback(js_vm *vm, js_coro *cr) {
 
     Local<Function> cb = Local<Function>::Cast(
                 Local<Value>::New(isolate, cr->callback->handle));
-    js_dispose(cr->callback);
+    js_reset(cr->callback);
 
     assert(!cb.IsEmpty());
     Local<Value> args[2];
@@ -195,12 +202,12 @@ static int RunCoroCallback(js_vm *vm, js_coro *cr) {
         args[0] = args[1]->ToString(context).ToLocalChecked();
         args[1] = v8::Null(isolate);
     }
-    js_dispose(cr->inval);
+    js_reset(cr->inval);
 
     /* XXX: _must_ not be disposed in the C code.
      * Should be ref. counting persistent handles?? */
     if(cr->outval != cr->inval)
-        js_dispose(cr->outval);
+        js_reset(cr->outval);
     delete cr;
 
     assert(!try_catch.HasCaught());
@@ -287,8 +294,8 @@ static void CallForeignFunc(
         rh = vm->null_handle;
     Local<Value> rv = Local<Value>::New(isolate, rh->handle);
     for (int i = 0; i < argc; i++)
-        js_dispose(ah[i]);
-    js_dispose(rh);
+        js_reset(ah[i]);
+    js_reset(rh);
     args.GetReturnValue().Set(rv);
 #undef MAXARGS
 }
@@ -359,7 +366,7 @@ coroutine static void start_coro(mill_pipe p) {
         if (done)
             break;
         assert(cr->coro);
-        Fncoro_t co = (Fncoro_t) cr->coro;
+        Fncoro co = (Fncoro) cr->coro;
         go(co(cr->vm, cr, cr->inval));
     }
 }
@@ -555,9 +562,14 @@ static js_handle *make_handle(js_vm *vm,
         Local<Object> obj = Local<Object>::Cast(value);
         assert(obj == value);
         int id = GetCtypeId(obj);
-        if (id == V8EXTPTR || id == V8EXTFUNC)
+        if (id > 0) {
+            if (IsCtypeWeak(obj)) {
+                // Bailing out for now.
+                fprintf(stderr, "js error: (weak) c-type cannot be exported\n");
+                exit(1);
+            }
             h->type = (enum js_code) id;
-        else
+        } else
             h->type = V8OBJECT;
     } else
         h->type = V8UNKNOWN;
@@ -850,6 +862,7 @@ js_handle *js_pointer(js_vm *vm, void *ptr) {
     obj->SetInternalField(1, External::New(isolate, ptr));
     js_handle *h = make_handle(vm, obj, V8EXTPTR);
     h->ptr = ptr;
+    h->free_func = (Fnfree) nullptr;
     return h;
 }
 
@@ -989,7 +1002,7 @@ void *js_topointer(js_handle *h) {
     return ptr;
 }
 
-void js_dispose(js_handle *h) {
+void js_reset(js_handle *h) {
     Isolate *isolate = h->vm->isolate;
     Locker locker(isolate);
     if ((h->flags & PERM_HANDLE) == 0) {
@@ -998,6 +1011,35 @@ void js_dispose(js_handle *h) {
         if (h->flags & STR_HANDLE)
             free(h->stp);
         delete h;
+    }
+}
+
+static void WeakPtrCallback(
+        const v8::WeakCallbackInfo<js_handle> &data) {
+    js_handle *h = data.GetParameter();
+    if (h->free_func)
+        h->free_func(h->ptr);
+    h->handle.Reset();
+    delete h;
+}
+
+void js_dispose(js_handle *h, Fnfree free_func) {
+    Isolate *isolate = h->vm->isolate;
+    Locker locker(isolate);
+    if (free_func && h->type == V8EXTPTR
+            && (h->flags & PERM_HANDLE) == 0
+    ) {
+        Isolate::Scope isolate_scope(isolate);
+        HandleScope handle_scope(isolate);
+        Local<Object> obj = Local<Object>::Cast(
+                    Local<Value>::New(isolate, h->handle));
+        int oid = (V8EXTPTR<<2)|(1<<1);
+        obj->SetAlignedPointerInInternalField(0,
+                reinterpret_cast<void*>(static_cast<uintptr_t>(oid)));
+        assert(IsCtypeWeak(obj));
+        h->free_func = free_func;
+        h->handle.SetWeak(h, WeakPtrCallback, WeakCallbackType::kParameter);
+        h->handle.MarkIndependent();
     }
 }
 
@@ -1016,7 +1058,7 @@ static js_handle *CallFunc(struct js8_arg_s *args) {
         if (!result)
             return NULL;
         v1 = Local<Value>::New(isolate, result->handle);
-        js_dispose(result);
+        js_reset(result);
     } else
         v1 = Local<Value>::New(isolate, args->h1->handle);
 

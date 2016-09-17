@@ -49,7 +49,7 @@ int js_run(js_vm *vm, const char *src) {
     js_handle *h = js_eval(vm, src);
     if (!h)
         return 0;
-    js_dispose(h);
+    js_reset(h);
     return 1;
 }
 

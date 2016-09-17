@@ -37,7 +37,8 @@ extern const js_handle *js_null(js_vm *vm);
 extern js_handle *js_pointer(js_vm *vm, void *ptr);
 extern js_handle *js_cfunc(js_vm *vm, const js_ffn_t *func_wrap);
 
-extern void js_dispose(js_handle *h);
+extern void js_reset(js_handle *h);
+extern void js_dispose(js_handle *h, Fnfree free_func);
 
 extern void *js_topointer(js_handle *h);
 extern const char *js_tostring(js_handle *h);

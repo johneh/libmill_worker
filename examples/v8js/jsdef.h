@@ -9,7 +9,8 @@ typedef struct js_handle_s js_handle;
 
 struct js_coro_s;
 typedef struct js_coro_s js_coro;
-typedef void (*Fncoro_t)(js_vm *vm, js_coro *, js_handle *);
+typedef void (*Fncoro)(js_vm *vm, js_coro *, js_handle *);
+typedef void (*Fnfree)(void *ptr);
 
 struct cffn_s {
     int pcount;

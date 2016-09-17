@@ -48,7 +48,7 @@ struct js_handle_s {
         void *ptr;
     };
     js_vm *vm;
-
+    Fnfree free_func;
     v8::Persistent<v8::Value> handle;
 };
 

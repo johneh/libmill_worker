@@ -38,8 +38,8 @@ void testcall(js_vm *vm) {
     js_handle *h1 = js_call(vm, list_props, NULL,
                         (jsargs_t) { JSGLOBAL(vm) });
     CHECK(h1, vm);
-    js_dispose(h1);
-    js_dispose(list_props);
+    js_reset(h1);
+    js_reset(list_props);
 }
 
 coroutine void do_task1(js_vm *vm, js_coro *cr, js_handle *inh) {
@@ -72,8 +72,8 @@ void testgo(js_vm *vm) {
     /* Global.task1 = f1; */
     int rc = js_set(JSGLOBAL(vm), "task1", f1);
     assert(rc);
-    js_dispose(f1);
-    js_dispose(p1);
+    js_reset(f1);
+    js_reset(p1);
 
     rc = js_run(vm,
 "for(var i=1; i<=5;i++) {\n\
@@ -105,8 +105,8 @@ void testsend(js_vm *vm) {
     /* Global.task1 = f1; */
     int rc = js_set(JSGLOBAL(vm), "task2", f1);
     assert(rc);
-    js_dispose(f1);
-    js_dispose(p1);
+    js_reset(f1);
+    js_reset(p1);
 
     rc = js_run(vm,
 "for(var i=1; i<=5;i++) {\n\
@@ -156,7 +156,7 @@ js_handle *exports(js_vm *vm) {
         js_handle *f1 = js_cfunc(vm, &ff_table[i]);
         if (! js_set(h1, ff_table[i].name, f1))
             js_panic(vm);
-        js_dispose(f1);
+        js_reset(f1);
     }
     return h1;
 }
@@ -164,7 +164,7 @@ js_handle *exports(js_vm *vm) {
 void testexports(js_vm *vm) {
     js_handle *eh = exports(vm);
     js_set(JSGLOBAL(vm), "c", eh);
-    js_dispose(eh);
+    js_reset(eh);
     int rc = js_run(vm,
 "var s = c.readfile('./testjs.c');\n\
 if (s !== null) $print(s.substring(0, 20) + ' ...');"
@@ -193,9 +193,9 @@ $print(ia); return ia;});\n", NULL, (jsargs_t) { h2 });
     assert(p1 == p2);
     p2 = js_externalize(h2);    // Living dangerously.
     assert(p1 == p2);
-    js_dispose(h2);
-    js_dispose(h3);
-    js_dispose(h4);
+    js_reset(h2);
+    js_reset(h3);
+    js_reset(h4);
     js_gc(vm);
     free(p1);   // no references to the array buffer left(?) or needed.
 }
