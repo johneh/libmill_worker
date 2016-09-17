@@ -38,9 +38,8 @@ struct js_handle_s {
 #define PERM_HANDLE (1 << 0)
 #define DBL_HANDLE  (1 << 1)
 #define STR_HANDLE  (1 << 2)
-#define PTR_HANDLE  (1 << 3)
-#define INT32_HANDLE    (1 << 4)
-#define VALUE_MASK (DBL_HANDLE|STR_HANDLE|PTR_HANDLE|INT32_HANDLE)
+#define INT32_HANDLE    (1 << 3)
+#define VALUE_MASK (DBL_HANDLE|STR_HANDLE|INT32_HANDLE)
 
     union {
         double d;

@@ -70,14 +70,13 @@ fprintf(stderr, format , ## args);
 #define DPRINT(format, args...) /* nothing */
 #endif
 
-extern void js_set_errstr(js_vm *vm, const char *str);
 extern js_coro *choose_coro(chan ch, int64_t ddline);
 
 static inline js_handle *make_handle(js_vm *vm,
             Local<Value> value, enum js_code type);
 static void *ExternalPtrValue(Local <Value> v);
 
-void js_set_errstr(js_vm *vm, const char *str) {
+static void js_set_errstr(js_vm *vm, const char *str) {
     if (vm->errstr) {
         free((void *) vm->errstr);
         vm->errstr = nullptr;
@@ -152,7 +151,7 @@ static void Go(const FunctionCallbackInfo<Value>& args) {
     Isolate *isolate = args.GetIsolate();
     HandleScope handle_scope(isolate);
     int argc = args.Length();
-	ThrowNotEnoughArgs(isolate, argc < 3);
+    ThrowNotEnoughArgs(isolate, argc < 3);
     vm = static_cast<js_vm*>(isolate->GetData(0));
     fn = (Fncoro_t) ExternalPtrValue(args[0]);
     if (!fn)
@@ -761,6 +760,82 @@ int js_seti(js_handle *hobj, unsigned index, js_handle *hval) {
                 Local<Value>::New(isolate, hval->handle)).FromJust();
 }
 
+/* N.B.: V8 owns the Buffer memory. If ptr is not NULL, it must be
+ * compatible with ArrayBuffer::Allocator::Free. */
+js_handle *js_arraybuffer(js_vm *vm,
+        void *ptr, size_t byte_length) {
+    Isolate *isolate = vm->isolate;
+    LOCK_SCOPE(isolate)
+    Local<Context> context = Local<Context>::New(isolate, vm->context);
+    Context::Scope context_scope(context);
+    if (ptr) {
+        return make_handle(vm,
+                ArrayBuffer::New(isolate, ptr, byte_length,
+                    v8::ArrayBufferCreationMode::kInternalized), V8OBJECT);
+    }
+    return make_handle(vm,
+            ArrayBuffer::New(isolate, byte_length), V8OBJECT);
+}
+
+size_t js_bytelength(js_handle *hab) {
+    Isolate *isolate = hab->vm->isolate;
+    LOCK_SCOPE(isolate)
+    Local<Value> v1 = Local<Value>::New(isolate, hab->handle);
+    size_t len = 0;
+    if (v1->IsArrayBufferView()) {
+        /* ArrayBufferView is implemented by all typed arrays and DataView */
+        len = Local<ArrayBufferView>::Cast(v1)->ByteLength();
+    } else if (v1->IsArrayBuffer()) {
+        len = Local<ArrayBuffer>::Cast(v1)->ByteLength();
+    } /* else
+        len = 0; */
+    return len;
+}
+
+size_t js_byteoffset(js_handle *habv) {
+    Isolate *isolate = habv->vm->isolate;
+    LOCK_SCOPE(isolate)
+    Local<Value> v1 = Local<Value>::New(isolate, habv->handle);
+    size_t off = 0;
+    if (v1->IsArrayBufferView()) {
+        /* ArrayBufferView is implemented by all typed arrays and DataView */
+        off = Local<ArrayBufferView>::Cast(v1)->ByteOffset();
+    } /* else
+        off = 0; */
+    return off;
+}
+
+js_handle *js_getbuffer(js_handle *habv) {
+    js_vm *vm = habv->vm;
+    Isolate *isolate = vm->isolate;
+    LOCK_SCOPE(isolate)
+    Local<Value> v1 = Local<Value>::New(isolate, habv->handle);
+    if (!v1->IsTypedArray()) {
+        js_set_errstr(vm, "js_getbuffer: ArrayBufferView argument expected");
+        return nullptr;
+    }
+    Local<Value> ab = Local<TypedArray>::Cast(v1)->Buffer();
+    return make_handle(vm, ab, V8OBJECT);
+}
+
+void *js_externalize(js_handle *h) {
+    js_vm *vm = h->vm;
+    Isolate *isolate = vm->isolate;
+    void *ptr;
+    LOCK_SCOPE(isolate);
+    // Clear error.
+    js_set_errstr(vm, nullptr);
+    Local<Value> v1 = Local<Value>::New(isolate, h->handle);
+    if (v1->IsArrayBuffer()) {
+        ptr = Local<ArrayBuffer>::Cast(v1)->Externalize().Data();
+    } else {
+        js_set_errstr(vm,
+            "js_externalize: ArrayBuffer argument expected");
+        ptr = nullptr;
+    }
+    return ptr;
+}
+
 js_handle *js_pointer(js_vm *vm, void *ptr) {
     Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate);
@@ -774,7 +849,6 @@ js_handle *js_pointer(js_vm *vm, void *ptr) {
     obj->SetAlignedPointerInInternalField(0, ptr1);
     obj->SetInternalField(1, External::New(isolate, ptr));
     js_handle *h = make_handle(vm, obj, V8EXTPTR);
-    h->flags |= PTR_HANDLE;
     h->ptr = ptr;
     return h;
 }
@@ -789,7 +863,7 @@ static void *ExternalPtrValue(Local <Value> v) {
     return nullptr;
 }
 
-js_handle *js_ffn(js_vm *vm, const struct cffn_s *func_wrap) {
+js_handle *js_cfunc(js_vm *vm, const struct cffn_s *func_wrap) {
     Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate);
     Local<Context> context = Local<Context>::New(isolate, vm->context);
@@ -896,20 +970,21 @@ void *js_topointer(js_handle *h) {
     Locker locker(isolate);
     // Clear error
     js_set_errstr(vm, nullptr);
-    if (h->type == V8EXTPTR && (h->flags & PTR_HANDLE) != 0) {
+    if (h->type == V8EXTPTR)
         return h->ptr;
-    }
 
     void *ptr;
     Isolate::Scope isolate_scope(isolate);
     HandleScope handle_scope(isolate);
-    if (h->type != V8EXTPTR) {
+
+    Local<Value> v1 = Local<Value>::New(isolate, h->handle);
+    if (v1->IsArrayBuffer()) {
+        // The pointer will be invalid if the ArrayBuffer gets
+        // garbage collected!.
+        ptr = Local<ArrayBuffer>::Cast(v1)->GetContents().Data();
+    } else {
         js_set_errstr(vm, "js_topointer: pointer argument expected");
         ptr = nullptr;
-    } else {
-        Local<Object> obj = Local<Object>::Cast(
-                                Local<Value>::New(isolate, h->handle));
-        ptr = Local<External>::Cast(obj->GetInternalField(1))->Value();
     }
     return ptr;
 }

@@ -153,7 +153,7 @@ js_handle *exports(js_vm *vm) {
     int n = sizeof (ff_table) / sizeof (ff_table[0]);
     js_handle *h1 = js_object(vm);
     for (i = 0; i < n; i++) {
-        js_handle *f1 = js_ffn(vm, &ff_table[i]);
+        js_handle *f1 = js_cfunc(vm, &ff_table[i]);
         if (! js_set(h1, ff_table[i].name, f1))
             js_panic(vm);
         js_dispose(f1);
@@ -172,6 +172,33 @@ if (s !== null) $print(s.substring(0, 20) + ' ...');"
     CHECK(rc, vm);
 }
 
+void testarraybuffer(js_vm *vm) {
+    void *p1 = malloc(16);  // Memory must come from malloc().
+    assert(p1);
+    js_handle *h2 = js_arraybuffer(vm, p1, 16);
+    CHECK(h2, vm);
+    printf("byteLength = %d\n", (int) js_bytelength(h2));
+
+    js_handle *h3 = js_callstr(vm, "(function(ab){\n\
+var ia = new Int32Array(ab);\n\
+ia[0] = 11; ia[1] = 22; ia[2] = 33; ia[3] = 44;\n\
+$print(ia); return ia;});\n", NULL, (jsargs_t) { h2 });
+    CHECK(h3, vm);
+    assert(js_isobject(h3));
+    printf("byteLength = %d\n", (int) js_bytelength(h3));
+    js_handle *h4 = js_getbuffer(h3);
+    CHECK(h4, vm);
+    printf("byteLength = %d\n", (int) js_bytelength(h4));
+    void *p2 = js_topointer(h2);
+    assert(p1 == p2);
+    p2 = js_externalize(h2);    // Living dangerously.
+    assert(p1 == p2);
+    js_dispose(h2);
+    js_dispose(h3);
+    js_dispose(h4);
+    js_gc(vm);
+    free(p1);   // no references to the array buffer left(?) or needed.
+}
 
 int main(int argc, char *argv[]) {
     mill_init(-1, 0);
@@ -182,6 +209,8 @@ int main(int argc, char *argv[]) {
     testgo(vm);
     testexports(vm);
     testsend(vm);
+    testarraybuffer(vm);
+
     js_vmclose(vm);
     mill_worker_delete(w);
     mill_fini();

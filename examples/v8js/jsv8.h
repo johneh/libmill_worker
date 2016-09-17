@@ -23,6 +23,11 @@ extern int js_seti(js_handle *hobj, unsigned index, js_handle *hval);
 extern int js_set_string(js_handle *hobj,
         const char *name, const char *val);
 extern js_handle *js_array(js_vm *vm, int length);
+extern js_handle *js_arraybuffer(js_vm *vm,
+        void *ptr, size_t byte_length);
+extern size_t js_bytelength(js_handle *harrbufview);
+extern js_handle *js_getbuffer(js_handle *harrbufview);
+extern void *js_externalize(js_handle *h);
 
 extern const js_handle *js_global(js_vm *vm);
 #define JSGLOBAL(vm)    (js_handle *)js_global(vm)
@@ -30,7 +35,7 @@ extern const js_handle *js_null(js_vm *vm);
 #define JSNULL(vm)    (js_handle *)js_null(vm)
 
 extern js_handle *js_pointer(js_vm *vm, void *ptr);
-extern js_handle *js_ffn(js_vm *vm, const js_ffn_t *func_wrap);
+extern js_handle *js_cfunc(js_vm *vm, const js_ffn_t *func_wrap);
 
 extern void js_dispose(js_handle *h);
 
@@ -51,6 +56,4 @@ extern int js_isundefined(js_handle *h);
 extern void js_send(js_coro *t, js_handle *oh, int err);
 
 extern const char *js_errstr(js_vm *vm);
-extern void js_set_errstr(js_vm *vm, const char *str);
-
 extern void js_gc(js_vm *vm);

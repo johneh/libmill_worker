@@ -57,15 +57,12 @@ int js_run(js_vm *vm, const char *src) {
 // js_call(vm, func, NULL, (jsargs_t){0})
 // -> this === Global and 0 args
 //
+/* Returns NULL if there was an error in V8. */
 js_handle *js_call(js_vm *vm, js_handle *hfunc,
         js_handle *hself, jsargs_t hargs) {
 
     struct js8_arg_s args;
     args.type = V8CALL;
-    if (!js_isfunction(hfunc)) {
-        js_set_errstr(vm, "js_call: argument #2: function expected");
-        return NULL;
-    }
     args.vm = vm;
     args.h1 = hfunc;
     int i, nargs = 0;
@@ -76,7 +73,7 @@ js_handle *js_call(js_vm *vm, js_handle *hfunc,
     args.nargs = nargs;
     args.h = hself;
     (void) task_run(js8_worker(vm), (void *) js8_do, &args, -1);
-    return args.h; /* NULL in case of error */
+    return args.h;
 }
 
 // source is a function expression
@@ -96,7 +93,7 @@ js_handle *js_callstr(js_vm *vm, const char *source,
     args.nargs = nargs;
     args.h = hself;
     (void) task_run(js8_worker(vm), (void *) js8_do, &args, -1);
-    return args.h; /* NULL in case of error */
+    return args.h; /* NULL if there was an error in V8. */
 }
 
 void js_gc(js_vm *vm) {
