@@ -90,6 +90,12 @@ static void SetError(js_vm *vm, TryCatch *try_catch) {
     js_set_errstr(vm, GetExceptionString(vm->isolate, try_catch));
 }
 
+static void Panic(Isolate *isolate, TryCatch *try_catch) {
+    char *errstr = GetExceptionString(isolate, try_catch);
+    fprintf(stderr, "%s\n", errstr);
+    exit(1);
+}
+
 static int IsCtypeWeak(Local<Object> obj) {
     assert(obj->InternalFieldCount() == 2);
     int id = static_cast<int>(reinterpret_cast<uintptr_t>(
@@ -180,7 +186,7 @@ static void Go(const FunctionCallbackInfo<Value>& args) {
 }
 
 // callback(err, data)
-static int RunCoroCallback(js_vm *vm, js_coro *cr) {
+static void RunCoroCallback(js_vm *vm, js_coro *cr) {
     Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate)
     vm->ncoro--;
@@ -214,12 +220,8 @@ static int RunCoroCallback(js_vm *vm, js_coro *cr) {
     assert(!try_catch.HasCaught());
     cb->Call(context->Global(), 2, args);
     if (try_catch.HasCaught()) {
-        /* FIXME ? */
-        char *errstr = GetExceptionString(isolate, &try_catch);
-        fprintf(stderr, "Error: %s\n", errstr);
-        exit(1);
+        Panic(isolate, &try_catch);
     }
-    return 1;
 }
 
 static void send_coro(js_vm *vm, js_coro *cr) {
@@ -375,7 +377,7 @@ static void v8init(void) {
 
 // Start a $send() coroutine in the main thread.
 coroutine static void start_coro(mill_pipe p) {
-    while (1) {
+    while (true) {
         int done;
         js_coro *cr = *((js_coro **) mill_piperecv(p, &done));
         if (done)
@@ -423,7 +425,7 @@ static void GlobalSet(Local<Name> name, Local<Value> val,
 
 // Receive coroutine with result from the main thread.
 coroutine static void recv_coro(js_vm *vm) {
-    while (1) {
+    while (true) {
         int done;
         js_coro *cr = *((js_coro **) mill_piperecv(vm->outq, &done));
         if (done) {
@@ -475,7 +477,6 @@ static void CreateIsolate(js_vm *vm) {
 
     Local<Context> context = Context::New(isolate, NULL, global);
     if (context.IsEmpty()) {
-        /* FIXME: don't bail out. */
         fprintf(stderr, "failed to create a V8 context\n");
         exit(1);
     }
@@ -573,7 +574,7 @@ static js_handle *init_handle(js_vm *vm,
         int id = GetCtypeId(obj);
         if (id > 0) {
             if (IsCtypeWeak(obj)) {
-                /* No song and dance please. */
+                /* Bailing out for now. */
                 fprintf(stderr, "error: (weak) ctype object cannot be exported\n");
                 exit(1);
             }
@@ -654,7 +655,7 @@ static js_handle *CompileRun(js_vm *vm, const char *src) {
     Context::Scope context_scope(context);
 
     TryCatch try_catch(isolate);
-    const char *script_name = "<string>";
+    const char *script_name = "<string>";   // TODO: optional argument
     Local<String> name(String::NewFromUtf8(isolate, script_name,
                 NewStringType::kNormal).ToLocalChecked());
     Local<String> source(String::NewFromUtf8(isolate, src,
@@ -679,6 +680,9 @@ static js_handle *CompileRun(js_vm *vm, const char *src) {
 js_handle *js_string(js_vm *vm, const char *stp, int length) {
     Isolate *isolate = vm->isolate;
     LOCK_SCOPE(isolate)
+    assert(stp);
+    if (length < 0)
+        length = strlen(stp);
     return make_handle(vm, String::NewFromUtf8(isolate, stp,
                             v8::String::kNormalString, length),
                 V8STRING);
@@ -968,7 +972,7 @@ const char *js_tostring(js_handle *h) {
     if (!*stval)    // conversion error
         return NULL;
 #endif
-    /* return empty string if conversion error */
+    /* return empty string if there was an error during conversion. */
     h->stp = estrdup(*stval, stval.length());
     h->flags |= STR_HANDLE;
     return h->stp;

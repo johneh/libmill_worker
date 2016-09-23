@@ -50,7 +50,7 @@ coroutine void do_task1(js_vm *vm, js_coro *cr, js_handle *inh) {
     mill_sleep(now() + k);
     char tmp[100];
     sprintf(tmp, "%s -> Task done in %d millsecs ...", s1, k);
-    js_handle *oh = js_string(vm, tmp, strlen(tmp));
+    js_handle *oh = js_string(vm, tmp, -1);
     js_send(cr, oh, 0);  /* oh and inh disposed by V8 */
 }
 
@@ -138,7 +138,7 @@ js_handle *ff_readfile(js_vm *vm, int argc, js_handle *argv[]) {
 js_handle *ff_strerror(js_vm *vm, int argc, js_handle *argv[]) {
     int errnum = (int) js_tonumber(argv[0]);
     char *s = strerror(errnum);
-    js_handle *ret = js_string(vm, s, strlen(s));
+    js_handle *ret = js_string(vm, s, -1);
     return ret;
 }
 
@@ -165,9 +165,10 @@ void testexports(js_vm *vm) {
     js_handle *eh = exports(vm);
     js_set(JSGLOBAL(vm), "c", eh);
     js_reset(eh);
-    int rc = js_run(vm,
-"var s = c.readfile('./testjs.c');\n\
-if (s !== null) $print(s.substring(0, 20) + ' ...');"
+    int rc = js_run(vm, "(function(filename) {\n\
+var s = c.readfile(filename);\n\
+if (s !== null) $print(filename + ' size = ' + s.length);\n\
+else throw new Error(c.strerror($errno));})('./testjs.c');"
     );
     CHECK(rc, vm);
 }

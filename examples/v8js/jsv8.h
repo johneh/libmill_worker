@@ -12,7 +12,9 @@ extern js_handle *js_call(js_vm *vm,
 extern js_handle *js_callstr(js_vm *vm, const char *source,
         js_handle *hself, jsargs_t hargs);
 
+/* if length is -1, the number of bytes is calculated using strlen(stp). */
 extern js_handle *js_string(js_vm *vm, const char *stp, int length);
+
 extern js_handle *js_number(js_vm *vm, double d);
 extern js_handle *js_int32(js_vm *vm, int32_t i);
 extern js_handle *js_object(js_vm *vm);
