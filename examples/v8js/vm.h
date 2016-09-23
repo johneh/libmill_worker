@@ -20,21 +20,16 @@ struct js_vm_s {
     struct js_handle_s *global_handle;
     struct js_handle_s *null_handle;
     struct js_handle_s *undef_handle;
+    struct js_handle_s *nullptr_handle;
 
     v8::Persistent<v8::Context> context;
     v8::Persistent<v8::ObjectTemplate> extptr_template;
     v8::Persistent<v8::ObjectTemplate> extfunc_template;
 
+    v8::Persistent<v8::Value> ctype_proto;
+
     js_handle *args[MAXARGS];
 };
-
-#define GetCtypeId(obj) ((obj)->InternalFieldCount() != 2 ? 0 \
-    : static_cast<int>(reinterpret_cast<uintptr_t>( \
-        (obj)->GetAlignedPointerFromInternalField(0)) >> 2))
-
-#define IsCtypeId(obj, t) ((obj)->InternalFieldCount() == 2 && \
-    (t) == static_cast<int>(reinterpret_cast<uintptr_t>( \
-        (obj)->GetAlignedPointerFromInternalField(0)) >> 2))
 
 struct js_handle_s {
     enum js_code type;

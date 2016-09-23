@@ -75,7 +75,7 @@ static js_handle *init_handle(js_vm *vm,
             js_handle *h, Local<Value> value);
 static inline js_handle *make_handle(js_vm *vm,
             Local<Value> value, enum js_code type);
-static void *ExternalPtrValue(Local <Value> v);
+static void *ExternalPtrValue(js_vm *vm, Local <Value> v);
 
 static void js_set_errstr(js_vm *vm, const char *str) {
     if (vm->errstr) {
@@ -94,6 +94,26 @@ static void Panic(Isolate *isolate, TryCatch *try_catch) {
     char *errstr = GetExceptionString(isolate, try_catch);
     fprintf(stderr, "%s\n", errstr);
     exit(1);
+}
+
+static int GetCtypeId(js_vm *vm, Local<Value> v) {
+    if (!v->IsObject())
+        return 0;
+    HandleScope handle_scope(vm->isolate);
+    Local<Object> obj = Local<Object>::Cast(v);
+    if (obj->InternalFieldCount() != 2)
+        return 0;
+    Local<Value> proto = obj->GetPrototype();
+
+    /* Walking the proto chain */
+    while (!proto->IsNull()) {
+        if (proto == vm->ctype_proto) {
+            return static_cast<int>(reinterpret_cast<uintptr_t>(
+                    obj->GetAlignedPointerFromInternalField(0)) >> 2);
+        }
+        proto = proto->ToObject()->GetPrototype();
+    }
+    return 0;
 }
 
 static int IsCtypeWeak(Local<Object> obj) {
@@ -167,7 +187,7 @@ static void Go(const FunctionCallbackInfo<Value>& args) {
     int argc = args.Length();
     ThrowNotEnoughArgs(isolate, argc < 3);
     vm = static_cast<js_vm*>(isolate->GetData(0));
-    fn = (Fncoro) ExternalPtrValue(args[0]);
+    fn = (Fncoro) ExternalPtrValue(vm, args[0]);
     if (!fn)
         ThrowTypeError(isolate, "$go argument #1: coroutine expected");
     if (!args[2]->IsFunction())
@@ -248,7 +268,7 @@ static void Send(const FunctionCallbackInfo<Value>& args) {
     ThrowNotEnoughArgs(isolate, argc < 3);
     vm = static_cast<js_vm*>(isolate->GetData(0));
 
-    void *fn = ExternalPtrValue(args[0]);
+    void *fn = ExternalPtrValue(vm, args[0]);
     if (!fn)
         ThrowTypeError(isolate, "$send argument #1: coroutine expected");
     if (!args[2]->IsFunction())
@@ -280,11 +300,9 @@ static void CallForeignFunc(
     js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
 
     Local<Object> obj = args.Holder();
-
     assert(obj->InternalFieldCount() == 2);
     cffn_s *func_wrap = static_cast<cffn_s *>(
-            obj->GetAlignedPointerFromInternalField(1));
-
+                Local<External>::Cast(obj->GetInternalField(1))->Value());
     int argc = args.Length();
     if (argc > MAXARGS || argc != func_wrap->pcount)
         ThrowError(isolate, "C-function called with incorrect # of arguments");
@@ -438,6 +456,20 @@ coroutine static void recv_coro(js_vm *vm) {
     }
 }
 
+// C pointer and function objects method
+static void Ctype(const FunctionCallbackInfo<Value>& args) {
+    Isolate *isolate = args.GetIsolate();
+    HandleScope handle_scope(isolate);
+    js_vm *vm = static_cast<js_vm*>(isolate->GetData(0));
+    Local<Object> obj = args.This();
+    assert(args.Holder() == args.This());  // unlike in accessor callback, true here!
+    int id = GetCtypeId(vm, obj);
+    if (id == V8EXTPTR)
+        args.GetReturnValue().Set(String::NewFromUtf8(isolate, "C-pointer"));
+    else if (id == V8EXTFUNC)
+        args.GetReturnValue().Set(String::NewFromUtf8(isolate, "C-function"));
+}
+
 // The second part of the vm initialization.
 static void CreateIsolate(js_vm *vm) {
     v8init();
@@ -480,11 +512,10 @@ static void CreateIsolate(js_vm *vm) {
         fprintf(stderr, "failed to create a V8 context\n");
         exit(1);
     }
-    // Name the global object "Global".
-    Local<Object> realGlobal = Local<Object>::Cast(context->Global()->GetPrototype());
-    realGlobal->Set(String::NewFromUtf8(isolate, "Global"), realGlobal);
 
     vm->context.Reset(isolate, context);
+
+    Context::Scope context_scope(context);
 
     // Make the template for external(foreign) pointer objects.
     Local<ObjectTemplate> extptr_templ = ObjectTemplate::New(isolate);
@@ -497,12 +528,6 @@ static void CreateIsolate(js_vm *vm) {
     func_templ->SetCallAsFunctionHandler(CallForeignFunc);
     vm->extfunc_template.Reset(isolate, func_templ);
 
-    realGlobal->SetAccessor(context,
-            String::NewFromUtf8(isolate, "$errno"),
-            GlobalGet, GlobalSet).FromJust();
-
-    vm->global_handle = make_handle(vm, realGlobal, V8OBJECT);
-    vm->global_handle->flags |= PERM_HANDLE;
     vm->undef_handle = new js_handle_s;
     vm->undef_handle->vm = vm;
     vm->undef_handle->type = V8UNDEFINED;
@@ -512,8 +537,38 @@ static void CreateIsolate(js_vm *vm) {
     vm->null_handle->vm = vm;
     vm->null_handle->type = V8NULL;
     vm->null_handle->flags = PERM_HANDLE;
-
     vm->null_handle->handle.Reset(vm->isolate, v8::Null(isolate));
+
+    // Construct the prototype object for C pointers and functions.
+    Local<ObjectTemplate> cp_templ = ObjectTemplate::New(isolate);
+    cp_templ->Set(String::NewFromUtf8(isolate, "ctype"),
+                FunctionTemplate::New(isolate, Ctype));
+    vm->ctype_proto.Reset(isolate,
+                cp_templ->NewInstance(context).ToLocalChecked());
+
+    Local<Object> nullptr_obj = extptr_templ->NewInstance(
+                                            context).ToLocalChecked();
+    nullptr_obj->SetAlignedPointerInInternalField(0,
+            reinterpret_cast<void*>(static_cast<uintptr_t>(V8EXTPTR<<2)));
+    nullptr_obj->SetInternalField(1, External::New(isolate, nullptr));
+    nullptr_obj->SetPrototype(Local<Value>::New(isolate, vm->ctype_proto));
+    vm->nullptr_handle = new js_handle_s;
+    vm->nullptr_handle->vm = vm;
+    vm->nullptr_handle->type = V8EXTPTR;
+    vm->nullptr_handle->ptr = nullptr;
+    vm->nullptr_handle->flags = PERM_HANDLE;
+    vm->nullptr_handle->handle.Reset(isolate, nullptr_obj);
+
+    // Name the global object "Global".
+    Local<Object> realGlobal = Local<Object>::Cast(
+                        context->Global()->GetPrototype());
+    realGlobal->Set(String::NewFromUtf8(isolate, "Global"), realGlobal);
+    realGlobal->Set(String::NewFromUtf8(isolate, "$nullptr"), nullptr_obj);
+    realGlobal->SetAccessor(context,
+            String::NewFromUtf8(isolate, "$errno"),
+            GlobalGet, GlobalSet).FromJust();
+    vm->global_handle = make_handle(vm, realGlobal, V8OBJECT);
+    vm->global_handle->flags |= PERM_HANDLE;
 }
 
 // Runs in the worker(V8) thread.
@@ -571,7 +626,7 @@ static js_handle *init_handle(js_vm *vm,
     else if (value->IsObject()) {
         Local<Object> obj = Local<Object>::Cast(value);
         assert(obj == value);
-        int id = GetCtypeId(obj);
+        int id = GetCtypeId(vm, obj);
         if (id > 0) {
             if (IsCtypeWeak(obj)) {
                 /* Bailing out for now. */
@@ -896,13 +951,15 @@ js_handle *js_pointer(js_vm *vm, void *ptr) {
     LOCK_SCOPE(isolate);
     Local<Context> context = Local<Context>::New(isolate, vm->context);
     Context::Scope context_scope(context);
-
+    if (!ptr)
+        return vm->nullptr_handle;
     Local<ObjectTemplate> templ =
             Local<ObjectTemplate>::New(isolate, vm->extptr_template);
     Local<Object> obj = templ->NewInstance(context).ToLocalChecked();
     void *ptr1 = reinterpret_cast<void*>(static_cast<uintptr_t>(V8EXTPTR<<2));
     obj->SetAlignedPointerInInternalField(0, ptr1);
     obj->SetInternalField(1, External::New(isolate, ptr));
+    obj->SetPrototype(Local<Value>::New(isolate, vm->ctype_proto));
     js_handle *h = make_handle(vm, obj, V8EXTPTR);
     h->ptr = ptr;
     h->free_func = (Fnfree) nullptr;
@@ -910,11 +967,11 @@ js_handle *js_pointer(js_vm *vm, void *ptr) {
 }
 
 // XXX: returns NULL if not V8EXTPTR!
-static void *ExternalPtrValue(Local <Value> v) {
+static void *ExternalPtrValue(js_vm *vm, Local <Value> v) {
     if (!v->IsObject())
         return nullptr;
     Local <Object> obj = Local<Object>::Cast(v);
-    if (IsCtypeId(obj, V8EXTPTR))
+    if (GetCtypeId(vm, obj) == V8EXTPTR)
         return Local<External>::Cast(obj->GetInternalField(1))->Value();
     return nullptr;
 }
@@ -931,7 +988,8 @@ js_handle *js_cfunc(js_vm *vm, const struct cffn_s *func_wrap) {
     assert(obj->InternalFieldCount() == 2);
     obj->SetAlignedPointerInInternalField(0,
              reinterpret_cast<void*>(static_cast<uintptr_t>(V8EXTFUNC<<2)));
-    obj->SetAlignedPointerInInternalField(1, (void *)func_wrap);
+    obj->SetInternalField(1, External::New(isolate, (void *)func_wrap));
+    obj->SetPrototype(Local<Value>::New(isolate, vm->ctype_proto));
     return make_handle(vm, obj, V8EXTFUNC);
 }
 
