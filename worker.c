@@ -613,3 +613,8 @@ static void init_workers_once(void) {
         mill_panic("failed to create any worker thread");
 }
 
+int mill_isself(struct mill_worker_s *w) {
+    mill_assert(w);
+    return pthread_equal(w->pth, pthread_self());
+}
+

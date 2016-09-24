@@ -331,7 +331,7 @@ MILL_EXPORT int task_go(mill_worker w,
 MILL_EXPORT mill_worker mill_worker_create(void);
 MILL_EXPORT void mill_worker_delete(mill_worker w);
 MILL_EXPORT int mill_worker_await(mill_worker w, int64_t deadline);
-
+MILL_EXPORT int mill_isself(mill_worker w);
 /******************************************************************************/
 /*  Mutex library                                                               */
 /******************************************************************************/
