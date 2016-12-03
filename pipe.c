@@ -5,7 +5,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <limits.h>
-#include "libmill.h"
+#include "libpill.h"
 #include "fd.h"
 #include "cr.h"
 #include "utils.h"

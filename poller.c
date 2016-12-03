@@ -26,7 +26,7 @@
 #include <sys/param.h>
 
 #include "cr.h"
-#include "libmill.h"
+#include "libpill.h"
 #include "list.h"
 #include "poller.h"
 #include "timer.h"

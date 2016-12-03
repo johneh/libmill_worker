@@ -44,7 +44,7 @@
 #include "dns/dns.h"
 
 #include "ip.h"
-#include "libmill.h"
+#include "libpill.h"
 #include "utils.h"
 #include "fd.h"
 

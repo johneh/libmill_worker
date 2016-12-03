@@ -33,7 +33,7 @@
 #include <unistd.h>
 
 #include "debug.h"
-#include "libmill.h"
+#include "libpill.h"
 #include "utils.h"
 
 #ifndef MILL_UNIX_BUFLEN

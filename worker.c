@@ -10,7 +10,7 @@
 #include <netdb.h>
 #include <poll.h>
 
-#include "libmill.h"
+#include "libpill.h"
 #include "list.h"
 #include "cr.h"
 #include "stack.h"

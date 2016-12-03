@@ -3,7 +3,7 @@ exec_prefix=@exec_prefix@
 libdir=@libdir@
 includedir=@includedir@
 
-Name: libmill
+Name: libpill
 Description: Go-style concurrency in C
 URL: http://libmill.org/
 Version: @LIBMILL_ABI_VERSION@

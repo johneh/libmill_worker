@@ -1,6 +1,6 @@
 #ifndef MILL_IO_INCLUDED
 #define MILL_IO_INCLUDED
-#include "libmill.h"
+#include "libpill.h"
 #include "list.h"
 
 enum mill_fdflags {

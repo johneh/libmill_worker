@@ -33,7 +33,7 @@ static mach_timebase_info_data_t mill_mtid = {0};
 #endif
 
 #include "cr.h"
-#include "libmill.h"
+#include "libpill.h"
 #include "timer.h"
 #include "utils.h"
 

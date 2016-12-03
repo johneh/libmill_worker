@@ -31,7 +31,7 @@
 #include <signal.h>
 
 #include "cr.h"
-#include "libmill.h"
+#include "libpill.h"
 #include "ip.h"
 #include "poller.h"
 #include "stack.h"

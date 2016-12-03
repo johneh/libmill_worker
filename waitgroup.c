@@ -1,6 +1,6 @@
 #include "cr.h"
 #include "utils.h"
-#include "libmill.h"
+#include "libpill.h"
 #include "timer.h"
 
 struct mill_wgroup_s {

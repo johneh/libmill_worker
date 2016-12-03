@@ -25,7 +25,7 @@
 #ifndef MILL_IP_INCLUDED
 #define MILL_IP_INCLUDED
 
-#include "libmill.h"
+#include "libpill.h"
 
 void mill_dns_init(void);
 
