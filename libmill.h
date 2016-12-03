@@ -384,6 +384,7 @@ MILL_EXPORT int mill_write(mill_fd mfd, const void *buf, int count,
 
 MILL_EXPORT int mill_fdwait(mill_fd mfd, int events, int64_t deadline);
 MILL_EXPORT void mill_fdclean(mill_fd mfd);
+MILL_EXPORT void mill_fdclose(mill_fd mfd);
 
 MILL_EXPORT mill_fd tcpconnect(ipaddr *addr, int64_t deadline);
 MILL_EXPORT mill_fd tcplisten(ipaddr *addr, int backlog, int reuseport);

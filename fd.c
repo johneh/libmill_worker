@@ -179,6 +179,15 @@ struct mill_fd_s *mill_open(int fd) {
     return mfd;
 }
 
+void mill_fdclose(struct mill_fd_s *mfd) {
+    if (mfd->fd >= 0) {
+        int fd = mfd->fd;
+        mill_fdclean(mfd);
+        close(fd);
+        mfd->fd = -1;
+    }
+}
+
 int mill_close(struct mill_fd_s *mfd, int doclosefd) {
     int fd;
     if (!mfd) {
@@ -186,11 +195,12 @@ int mill_close(struct mill_fd_s *mfd, int doclosefd) {
         return -1;
     }
     fd = mfd->fd;
-    if (fd >= 0)
+    if (fd >= 0) {
         mill_fdclean(mfd);
+        if (doclosefd)
+            close(fd);
+    }
     mill_free(mfd);
-    if (doclosefd)
-        close(fd);
     return 0;
 }
 

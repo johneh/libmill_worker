@@ -27,11 +27,11 @@ ACLOCAL_AMFLAGS = -I m4
 ################################################################################
 
 millincludedir = $(includedir)
-millinclude_HEADERS = libmill.h
+millinclude_HEADERS = libpill.h
 
-lib_LTLIBRARIES = libmill.la
+lib_LTLIBRARIES = libpill.la
 
-libmill_la_SOURCES = \
+libpill_la_SOURCES = \
     chan.h \
     chan.c \
     cr.h \
@@ -64,13 +64,13 @@ libmill_la_SOURCES = \
     waitgroup.c
 
 pkgconfigdir = $(libdir)/pkgconfig
-pkgconfig_DATA = libmill.pc
+pkgconfig_DATA = libpill.pc
 
-libmill_la_LDFLAGS = -no-undefined -version-info @MILL_LIBTOOL_VERSION@
+libpill_la_LDFLAGS = -no-undefined -version-info @MILL_LIBTOOL_VERSION@
 
 # Turn the source fortification in glibc off - otherwise it would panic
 # because of the stack pointer black magic in 'go' macro.
-libmill_la_CFLAGS = \
+libpill_la_CFLAGS = \
     -fvisibility=hidden\
     -DMILL_EXPORTS \
     -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0
@@ -94,7 +94,7 @@ libmill_la_CFLAGS = \
 #    tests/overload\
 #    tests/ip
 
-LDADD = libmill.la
+LDADD = libpill.la
 
 #TESTS = $(check_PROGRAMS)
 
