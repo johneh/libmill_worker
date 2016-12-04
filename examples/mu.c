@@ -3,7 +3,7 @@
 #include <string.h>
 #include <pthread.h>
 #include <assert.h>
-#include "libmill.h"
+#include "libpill.h"
 
 int count = 0;
 double d = 0.0;

@@ -3,7 +3,7 @@
 #include <pthread.h>
 #include <assert.h>
 #define MILL_CHOOSE 1
-#include "libmill.h"
+#include "libpill.h"
 
 /*
 On Linux, closing the write end of a pipe in one thread has no effect

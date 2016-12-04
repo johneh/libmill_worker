@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <pthread.h>
 #define MILL_CHOOSE 1
-#include "libmill.h"
+#include "libpill.h"
 
 coroutine void dot(char c, int *done) {
     while (! *done) {

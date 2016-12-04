@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <assert.h>
-#include "libmill.h"
+#include "libpill.h"
 
 static void pr_stat(const char *path, struct stat *s, int errcode) {
     if (errcode != 0) {

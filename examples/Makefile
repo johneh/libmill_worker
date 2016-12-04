@@ -1,7 +1,7 @@
 CC = gcc
 CFLAGS = -c -O2 -g -I../ -pthread
 BINS = apache_serve fsop pi mcp du3 xchoose fanin wrker mu
-LIBS = ../lib/libmill.a -pthread
+LIBS = ../.libs/libpill.a -pthread
 
 all: clean $(BINS)
 

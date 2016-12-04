@@ -7,7 +7,7 @@
 #include <errno.h>
 #include <assert.h>
 #include "readdir.h"
-#include "libmill.h"
+#include "libpill.h"
 
 /* synchronous version */
 int ReadDir(const char *dirname, FileInfo **info) {

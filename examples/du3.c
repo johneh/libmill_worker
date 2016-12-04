@@ -3,7 +3,7 @@
 #include <string.h>
 #include <assert.h>
 #define MILL_CHOOSE 1
-#include "libmill.h"
+#include "libpill.h"
 #include "readdir.h"
 
 /* N.B.: does not include size of the directory (argument) or any

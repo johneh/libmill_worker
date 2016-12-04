@@ -1,7 +1,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include <stdio.h>
-#include "libmill.h"
+#include "libpill.h"
 
 double drandom(void) {
     return ((double) random()) / ((double) RAND_MAX + 1.0);

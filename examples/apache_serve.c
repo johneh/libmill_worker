@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include "libmill.h"
+#include "libpill.h"
 
 // Adapted from a test program written by https://github.com/benjolitz:
 // Apache bench sends 52 bytes every time per request.
