@@ -24,6 +24,4 @@ struct mill_fd_s {
     struct mill_list_item item; /* epoll */
 };
 
-int mill_fdevent(int fd, int events, int64_t deadline);
-
 #endif

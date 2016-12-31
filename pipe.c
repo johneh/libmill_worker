@@ -19,6 +19,10 @@ struct mill_pipe_s {
     int refcnt;
 };
 
+int *mill_pipefds(struct mill_pipe_s *mp) {
+    return mp->fd;
+}
+
 struct mill_pipe_s *mill_pipemake(unsigned sz) {
     int fd[2];
     struct mill_pipe_s *mp;

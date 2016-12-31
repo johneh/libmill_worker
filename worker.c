@@ -9,6 +9,7 @@
 #include <sys/socket.h>
 #include <netdb.h>
 #include <poll.h>
+#include <signal.h>
 
 #include "libpill.h"
 #include "list.h"
@@ -42,7 +43,7 @@ enum task_code {
 #define MAX_WORKERS 64
 
 struct mill_worker_s {
-    struct mill_list_item item;
+    /* struct mill_list_item item; */
     pthread_t pth;
     mill_pipe task_queue;   /* request */
     int sfd;    /* thread initialization status written to this fd */

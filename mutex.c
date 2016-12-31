@@ -10,9 +10,91 @@
 #include "utils.h"
 
 /*
- * Linux eventfd based mutex alternative. Advantage over pthread-mutex
- * is that it does not block an entire thread.
-*/
+ * eventfd/pipe based mutex. Advantage over pthread-mutex is that it does not
+ * block an entire thread.
+ * XXX: really binary semaphore (the thread that locks a mutex is supposed
+ *      to unlock it).
+ */
+
+#if defined __linux__
+#include <sys/eventfd.h>
+
+struct mill_mutex_s {
+    int fd;
+    int refcnt;
+};
+
+struct mill_mutex_s *mill_mutex_make(void) {
+    struct mill_mutex_s *mu;
+    int fd = eventfd(1, 0);
+    if (fd == -1)
+        return NULL;
+    int flag = fcntl(fd, F_GETFL);
+    if (flag == -1)
+        flag = 0;
+    if (-1 == fcntl(fd, F_SETFL, flag|O_NONBLOCK)) {
+        int errcode = errno;
+        close(fd);
+        errno = errcode;
+        return NULL;
+    }
+    mu = mill_malloc(sizeof(struct mill_mutex_s));
+    if (! mu) {
+        int errcode = ENOMEM;
+        close(fd);
+        errno = errcode;
+        return NULL;
+    }
+    mu->fd = fd;
+    mu->refcnt = 1;
+    return mu;
+}
+
+void mill_mutex_lock(struct mill_mutex_s *mu) {
+    unsigned size = sizeof(uint64_t);
+    uint64_t val;
+    while (1) {
+        int n = (int) read(mu->fd, &val, size);
+        if (mill_fast(n == size)) {
+            mill_assert(val == 1);
+            return;
+        }
+        mill_assert(n < 0);
+        if (errno == EINTR)
+            continue;
+        if (errno != EAGAIN)
+            mill_panic(strerror(errno));
+        mill_fdevent(mu->fd, FDW_IN, -1);
+    }
+}
+
+void mill_mutex_unlock(struct mill_mutex_s *mu) {
+    uint64_t val = 1;
+    while (1) {
+        int n = (int) write(mu->fd, &val, sizeof(uint64_t));
+        if (mill_fast(n == sizeof(uint64_t)))
+            return;
+        mill_assert(n < 0);
+        if (errno == EINTR)
+            continue;
+        mill_panic(strerror(errno));
+    }
+}
+
+struct mill_mutex_s *mill_mutex_ref(struct mill_mutex_s *mu) {
+    mill_atomic_add(&mu->refcnt, 1);
+    return mu;
+}
+
+void mill_mutex_unref(struct mill_mutex_s *mu) {
+    int ref = mill_atomic_sub(&mu->refcnt, 1);
+    if (ref <= 0) {
+        (void) close(mu->fd);    /* FIXME: check return value and errno == EINTR */
+        mill_free(mu);
+    }
+}
+
+#else /* __linux__ */
 
 struct mill_mutex_s {
     int fd[2];
@@ -142,4 +224,4 @@ void mill_mutex_unref(struct mill_mutex_s *mu) {
         mill_free(mu);
     }
 }
-
+#endif

@@ -180,6 +180,7 @@ struct mill_fd_s *mill_open(int fd) {
 }
 
 void mill_fdclose(struct mill_fd_s *mfd) {
+    mill_assert(mfd);
     if (mfd->fd >= 0) {
         int fd = mfd->fd;
         mill_fdclean(mfd);
@@ -190,10 +191,12 @@ void mill_fdclose(struct mill_fd_s *mfd) {
 
 int mill_close(struct mill_fd_s *mfd, int doclosefd) {
     int fd;
+    /*
     if (!mfd) {
         errno = EINVAL;
         return -1;
-    }
+    }*/
+    mill_assert(mfd);
     fd = mfd->fd;
     if (fd >= 0) {
         mill_fdclean(mfd);
